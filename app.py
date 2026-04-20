@@ -14,28 +14,52 @@ st.set_page_config(
 )
 
 st.title("📊 Omnichannel Report Processor")
-st.markdown("Upload the client config and all CSV exports for the month. Reports download as a ZIP.")
+st.markdown("Upload CSV exports for the month. Reports download as a ZIP.")
 
 HISTORY_WS   = "History"
 HISTORY_COLS = ['Client', 'Month', 'Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue', 'Site Traffic']
+CONFIG_WS    = "Config"
+CONFIG_COLS  = ['Client Name', 'Conversion Column 1', 'Conversion Column 2',
+                'Conversion Column 3', 'Conversion Column 4', 'Site Traffic', 'Revenue']
 _SCOPES      = ["https://spreadsheets.google.com/feeds",
                 "https://www.googleapis.com/auth/drive"]
 
 
+def _open_spreadsheet():
+    cfg = dict(st.secrets["connections"]["gsheets"])
+    url = cfg.pop("spreadsheet")
+    cfg.pop("worksheet", None)
+    creds = Credentials.from_service_account_info(cfg, scopes=_SCOPES)
+    gc = gspread.authorize(creds)
+    return gc.open_by_url(url)
+
+
 def _get_gsheet():
     try:
-        cfg = dict(st.secrets["connections"]["gsheets"])
-        url = cfg.pop("spreadsheet")
-        cfg.pop("worksheet", None)
-        creds = Credentials.from_service_account_info(cfg, scopes=_SCOPES)
-        gc = gspread.authorize(creds)
-        sh = gc.open_by_url(url)
+        sh = _open_spreadsheet()
         try:
             return sh.worksheet(HISTORY_WS)
         except gspread.WorksheetNotFound:
             ws = sh.add_worksheet(HISTORY_WS, rows=1000, cols=len(HISTORY_COLS))
             ws.append_row(HISTORY_COLS)
             return ws
+    except Exception:
+        return None
+
+
+def _load_config_sheet():
+    try:
+        sh = _open_spreadsheet()
+        try:
+            ws = sh.worksheet(CONFIG_WS)
+        except gspread.WorksheetNotFound:
+            ws = sh.add_worksheet(CONFIG_WS, rows=200, cols=len(CONFIG_COLS))
+            ws.append_row(CONFIG_COLS)
+            return pd.DataFrame(columns=CONFIG_COLS)
+        records = ws.get_all_records()
+        if not records:
+            return pd.DataFrame(columns=CONFIG_COLS)
+        return pd.DataFrame(records)
     except Exception:
         return None
 
@@ -102,12 +126,21 @@ def _upsert_history(history_df, totals_row):
     return pd.concat([history_df, pd.DataFrame([totals_row])], ignore_index=True)
 
 
-# ── Step 1: config ────────────────────────────────────────────────────────────
-st.subheader("1. Client config")
-config_file = st.file_uploader("Upload client_config.xlsx", type=["xlsx"])
+# ── Load client config from Google Sheets ────────────────────────────────────
+config_df = _load_config_sheet()
 
-# ── Step 2: CSVs ──────────────────────────────────────────────────────────────
-st.subheader("2. CSV reports")
+if config_df is None:
+    st.warning("Google Sheets not configured. Upload client_config.xlsx manually.")
+    config_file = st.file_uploader("Upload client_config.xlsx", type=["xlsx"])
+    config_df = pd.read_excel(config_file) if config_file else None
+elif config_df.empty:
+    st.warning("The 'Config' tab in your Google Sheet is empty. Add client rows to get started.")
+    config_df = None
+else:
+    st.success(f"✓ Config loaded — {len(config_df)} client(s)")
+
+# ── Step 1: CSVs ──────────────────────────────────────────────────────────────
+st.subheader("1. CSV reports")
 csv_files = st.file_uploader(
     "Upload one or more Trade Desk CSV exports",
     type=["csv"],
@@ -115,11 +148,10 @@ csv_files = st.file_uploader(
 )
 
 # ── Process ───────────────────────────────────────────────────────────────────
-if config_file and csv_files:
+if config_df is not None and csv_files:
     st.markdown(f"**{len(csv_files)} file(s) ready.**")
 
     if st.button("Process all reports", type="primary", use_container_width=True):
-        config_df = pd.read_excel(config_file)
         ws = _get_gsheet()
         history_df = _load_history(ws)
 
@@ -171,5 +203,5 @@ if config_file and csv_files:
                 use_container_width=True,
             )
 
-else:
-    st.info("Upload client_config.xlsx and at least one CSV to get started.")
+elif config_df is not None:
+    st.info("Upload at least one CSV to get started.")
