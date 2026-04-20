@@ -201,7 +201,8 @@ def _td_row(cells, right_from=1):
 
 
 def generate_html(csv_path, client_name, conv_label, has_revenue,
-                  totals, grp_chan, grp_cre, grp_site, prev_data=None, upsell_data=None):
+                  totals, grp_chan, grp_cre, grp_site, prev_data=None, upsell_data=None,
+                  client_history=None):
     imp, clk, spnd, conv, st, pcv, rev = totals
     _, cpc, cpm, cvr, _ = calc_metrics(imp, clk, spnd, conv, pcv)
     ctr_overall = clk / imp * 100 if imp else 0
@@ -253,36 +254,69 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
 
     # ── MoM comparison table ─────────────────────────────────────────────
     mom_section = ''
-    if prev_data:
-        prev_month_label = _prev_month_label(report_month)
+    NA_mom = '<span style="color:#7A939C;font-size:11px">N/A</span>'
+
+    def _mc(main, curr, prev, invert=False):
+        badge = _delta_badge(curr, prev, invert=invert) if prev is not None else ''
+        return f'<span>{main}{badge}</span>'
+
+    history_rows_html = ''
+    if client_history is not None and not client_history.empty:
+        def _month_dt(m):
+            try:
+                return datetime.strptime(m, '%B %Y')
+            except Exception:
+                return datetime.min
+
+        hist = client_history.copy()
+        hist = hist[hist['Month'] != report_month]
+        hist['_dt'] = hist['Month'].apply(_month_dt)
+        hist = hist.sort_values('_dt')
+
+        prev_spend = prev_cpa_hist = prev_st_hist = prev_conv_hist = None
+        for _, r in hist.iterrows():
+            s  = float(r.get('Spend', 0) or 0)
+            c  = float(r.get('Conversions', 0) or 0)
+            st_h = float(r.get('Site Traffic', 0) or 0)
+            cpa_h = s / c if c else None
+            cpa_str = (
+                _mc(_m(cpa_h), cpa_h, prev_cpa_hist, invert=True)
+                if cpa_h is not None else NA_mom
+            )
+            history_rows_html += _td_row([
+                str(r['Month']),
+                _mc(_m(s), s, prev_spend),
+                _mc(_n(st_h), st_h, prev_st_hist),
+                _mc(_n(c), c, prev_conv_hist),
+                cpa_str,
+            ])
+            prev_spend, prev_st_hist, prev_conv_hist, prev_cpa_hist = s, st_h, c, cpa_h
+
+    if history_rows_html or prev_data:
         curr_cpa = spnd / conv if conv else None
-        prev_cpa = ps / pc if pc else None
-        NA_mom = '<span style="color:#7A939C;font-size:11px">N/A</span>'
-
-        def _mc(main, curr, prev):
-            badge = _delta_badge(curr, prev) if prev else ''
-            return f'<span>{main}{badge}</span>'
-
-        prev_cpa_str = _m(prev_cpa) if prev_cpa else NA_mom
+        p_spend_for_badge = float(prev_data['Spend']) if prev_data else None
+        p_st_for_badge    = float(prev_data['Site Traffic']) if prev_data else None
+        p_conv_for_badge  = float(prev_data['Conversions']) if prev_data else None
+        p_cpa_for_badge   = (float(prev_data['Spend']) / float(prev_data['Conversions'])
+                              if prev_data and float(prev_data.get('Conversions', 0)) else None)
         curr_cpa_str = (
-            f'<span>{_m(curr_cpa)}{_delta_badge(curr_cpa, prev_cpa, invert=True)}</span>'
-            if curr_cpa else NA_mom
+            _mc(_m(curr_cpa), curr_cpa, p_cpa_for_badge, invert=True)
+            if curr_cpa is not None else NA_mom
         )
-        mom_head = _th(['Month', 'Spend', 'Site Traffic', 'Conversions', 'CPA'], right_from=1)
-        prev_row = _td_row([prev_month_label, _m(ps), _n(p_st), _n(pc), prev_cpa_str])
         curr_row = _td_row([
-            report_month,
-            _mc(_m(spnd), spnd, ps),
-            _mc(_n(st), st, p_st),
-            _mc(_n(conv), conv, pc),
+            f'<strong>{report_month}</strong>',
+            _mc(_m(spnd), spnd, p_spend_for_badge),
+            _mc(_n(st), st, p_st_for_badge),
+            _mc(_n(conv), conv, p_conv_for_badge),
             curr_cpa_str,
         ])
+        mom_head = _th(['Month', 'Spend', 'Site Traffic', 'Conversions', 'CPA'], right_from=1)
         mom_section = f'''
   <div class="section-label">Month-on-Month Performance</div>
   <div class="table-wrap">
     <table>
       <thead>{mom_head}</thead>
-      <tbody>{prev_row}{curr_row}</tbody>
+      <tbody>{history_rows_html}{curr_row}</tbody>
     </table>
   </div>'''
 
@@ -759,7 +793,7 @@ def process_csv(csv_bytes, csv_filename, config_df, prev_data=None, client_histo
     html_str = generate_html(
         csv_filename, client_name, conv_label, has_revenue,
         (imp, clk, spnd, conv, st, pcv, rev),
-        grp_chan, grp_cre, grp_site, prev_data, upsell_data
+        grp_chan, grp_cre, grp_site, prev_data, upsell_data, client_history
     )
 
     totals_dict = {
