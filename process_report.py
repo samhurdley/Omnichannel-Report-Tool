@@ -96,20 +96,32 @@ def _rx(v):  return f"{v:.2f}x"
 
 _KPI_CYCLE = ['#EF426F', '#5BC2E7']
 
-def _delta_badge(curr_val, prev_val):
+def _delta_badge(curr_val, prev_val, invert=False):
     if not prev_val:
         return ''
     pct = (curr_val - prev_val) / abs(prev_val) * 100
-    color = '#5BC2E7' if pct >= 0 else '#EF426F'
-    arrow = '▲' if pct >= 0 else '▼'
+    if abs(pct) < 0.05:
+        return '<span style="color:#7A939C;font-size:10px;margin-left:5px;font-weight:600">no change</span>'
+    is_good = pct > 0 if not invert else pct < 0
+    color = '#5BC2E7' if is_good else '#EF426F'
+    arrow = '▲' if pct > 0 else '▼'
     return f'<span style="color:{color};font-size:10px;margin-left:5px;font-weight:600">{arrow}&nbsp;{abs(pct):.1f}%</span>'
 
-def _kpi_card(label, value, color='#EF426F', trend=None):
+def _avg_badge(value, benchmark):
+    color = '#5BC2E7' if value >= benchmark else '#EF426F'
+    arrow = '▲' if value >= benchmark else '▼'
+    return f'<span style="color:{color};font-size:11px;margin-left:4px">{arrow}</span>'
+
+def _kpi_card(label, value, color='#EF426F', trend=None, invert=False):
     trend_html = ''
     if trend is not None:
-        t_color = '#5BC2E7' if trend >= 0 else '#EF426F'
-        arrow = '▲' if trend >= 0 else '▼'
-        trend_html = f'<div class="kpi-trend" style="color:{t_color}">{arrow} {abs(trend):.1f}% vs last month</div>'
+        if abs(trend) < 0.05:
+            trend_html = '<div class="kpi-trend" style="color:#7A939C">no change vs last month</div>'
+        else:
+            is_good = trend > 0 if not invert else trend < 0
+            t_color = '#5BC2E7' if is_good else '#EF426F'
+            arrow = '▲' if trend > 0 else '▼'
+            trend_html = f'<div class="kpi-trend" style="color:{t_color}">{arrow} {abs(trend):.1f}% vs last month</div>'
     return f'''
         <div class="kpi-card" style="border-left:4px solid {color}">
           <div class="kpi-value">{value}</div>
@@ -164,23 +176,23 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         return (curr - prev_val) / abs(prev_val) * 100
 
     kpi_defs = [
-        ('Total Impressions',  _n(imp),         _t(imp, pi)),
-        ('Total Clicks',       _n(clk),         _t(clk, pk)),
-        ('Total Spend',        _m(spnd),        _t(spnd, ps)),
-        ('CTR',                _p(ctr_overall), _t(ctr_overall, prev_ctr)),
-        ('eCPC',               _m(cpc),         _t(cpc, prev_cpc)),
-        ('eCPM',               _m(cpm),         _t(cpm, prev_cpm)),
-        (f'Conversions ({conv_label})', _n(conv), _t(conv, pc)),
-        ('Conversion Rate',    _p(cvr),         _t(cvr, prev_cvr)),
+        ('Total Impressions',  _n(imp),         _t(imp, pi),               False),
+        ('Total Clicks',       _n(clk),         _t(clk, pk),               False),
+        ('Total Spend',        _m(spnd),        _t(spnd, ps),              False),
+        ('CTR',                _p(ctr_overall), _t(ctr_overall, prev_ctr), False),
+        ('eCPC',               _m(cpc),         _t(cpc, prev_cpc),         True),
+        ('eCPM',               _m(cpm),         _t(cpm, prev_cpm),         True),
+        (f'Conversions ({conv_label})', _n(conv), _t(conv, pc),            False),
+        ('Conversion Rate',    _p(cvr),         _t(cvr, prev_cvr),         False),
     ]
     if has_revenue:
         kpi_defs += [
-            ('Attributed Revenue', _m(rev),              _t(rev, pr)),
-            ('ROAS',               _rx(roas(rev, spnd)), _t(roas(rev, spnd), prev_roas)),
+            ('Attributed Revenue', _m(rev),              _t(rev, pr),                    False),
+            ('ROAS',               _rx(roas(rev, spnd)), _t(roas(rev, spnd), prev_roas), False),
         ]
     kpi_cards = ''.join(
-        _kpi_card(lbl, val, _KPI_CYCLE[i % len(_KPI_CYCLE)], trend)
-        for i, (lbl, val, trend) in enumerate(kpi_defs)
+        _kpi_card(lbl, val, _KPI_CYCLE[i % len(_KPI_CYCLE)], trend, inv)
+        for i, (lbl, val, trend, inv) in enumerate(kpi_defs)
     )
     kpi_cols = 5 if has_revenue else 4
 
@@ -198,7 +210,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
 
         prev_cpa_str = _m(prev_cpa) if prev_cpa else NA_mom
         curr_cpa_str = (
-            f'<span>{_m(curr_cpa)}{_delta_badge(curr_cpa, prev_cpa)}</span>'
+            f'<span>{_m(curr_cpa)}{_delta_badge(curr_cpa, prev_cpa, invert=True)}</span>'
             if curr_cpa else NA_mom
         )
         mom_head = _th(['Month', 'Spend', 'Site Traffic', 'Conversions', 'CPA'], right_from=1)
@@ -240,19 +252,40 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         out_body += _td_row(cells)
 
     # ── Table 2: Channel Engagement (Efficiency) ──────────────────────────
+    _CTR_BENCH_CH  = {'Display', 'Video'}
+    _COMP_HIGH_CH  = {'CTV', 'Audio'}
+    _COMP_VIDEO_CH = {'Video'}
+
     eng_hdrs = ['Channel', 'Impressions', 'Clicks', 'CTR', 'eCPC', 'eCPM', 'Completion Rate']
     eng_head = _th(eng_hdrs)
     eng_body = ''
     for _, r in grp_chan.iterrows():
         ctr_, cpc_, cpm_, _, comp_ = calc_metrics(r.imp, r.clk, r.spnd, r.conv, r.pcv)
         ch = str(r['_chan'])
+
+        if ch in NO_CLICKS:
+            ctr_cell = NA
+        elif ch in _CTR_BENCH_CH:
+            ctr_cell = f'<span>{_p(ctr_)}{_avg_badge(ctr_, 0.15)}</span>'
+        else:
+            ctr_cell = _p(ctr_)
+
+        if ch in NO_COMP:
+            comp_cell = NA
+        elif ch in _COMP_HIGH_CH:
+            comp_cell = f'<span>{_p(comp_)}{_avg_badge(comp_, 95.0)}</span>'
+        elif ch in _COMP_VIDEO_CH:
+            comp_cell = f'<span>{_p(comp_)}{_avg_badge(comp_, 50.0)}</span>'
+        else:
+            comp_cell = _p(comp_)
+
         cells = [
             ch, _n(r.imp),
             NA if ch in NO_CLICKS else _n(r.clk),
-            NA if ch in NO_CLICKS else _p(ctr_),
+            ctr_cell,
             NA if ch in NO_CLICKS else _m(cpc_),
             _m(cpm_),
-            NA if ch in NO_COMP else _p(comp_),
+            comp_cell,
         ]
         eng_body += _td_row(cells)
 
@@ -529,6 +562,13 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
       <thead>{eng_head}</thead>
       <tbody>{eng_body}</tbody>
     </table>
+  </div>
+  <div class="conv-note">
+    <span style="color:#5BC2E7;font-weight:700">▲</span> = Above industry average &nbsp;·&nbsp;
+    <span style="color:#EF426F;font-weight:700">▼</span> = Below industry average<br>
+    CTR (Display, Video): <strong>0.15%</strong> &nbsp;·&nbsp;
+    Completion Rate (CTV, Audio): <strong>95%</strong> &nbsp;·&nbsp;
+    Completion Rate (Video): <strong>50%</strong>
   </div>
 
   <div class="section-label">Top 10 Creatives by Attributed Site Traffic</div>
