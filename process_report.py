@@ -178,7 +178,7 @@ def _kpi_card(label, value, color='#EF426F', trend=None, invert=False):
             arrow = '▲' if trend > 0 else '▼'
             trend_html = f'<div class="kpi-trend" style="color:{t_color}">{arrow} {abs(trend):.1f}% vs last month</div>'
     return f'''
-        <div class="kpi-card" style="border-left:4px solid {color}">
+        <div class="kpi-card" style="border:2px solid {color}">
           <div class="kpi-value">{value}</div>
           <div class="kpi-label">{label}</div>
           {trend_html}
@@ -239,6 +239,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         ('Total Site Traffic',            _n(st),                             _t(st, p_st),                              False),
         (f'Total Conversions ({conv_label})', _n(conv),                       _t(conv, pc),                              False),
         ('CPA',                           _m(cpa_kpi) if conv else NA,        _t(cpa_kpi, prev_cpa_kpi) if conv else None, True),
+        ('Total Impressions',             _n(imp),                            _t(imp, pi),                               False),
         ('eCPM',                          _m(cpm),                            _t(cpm, prev_cpm),                         True),
     ]
     if has_revenue:
@@ -247,10 +248,10 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
             ('ROAS',    _rx(roas(rev, spnd)),   _t(roas(rev, spnd), prev_roas), False),
         ]
     kpi_cards = ''.join(
-        _kpi_card(lbl, val, _KPI_CYCLE[i % len(_KPI_CYCLE)], trend, inv)
+        _kpi_card(lbl, val, '#EF426F' if i < 4 else '#5BC2E7', trend, inv)
         for i, (lbl, val, trend, inv) in enumerate(kpi_defs)
     )
-    kpi_cols = 4 if has_revenue else 5
+    kpi_cols = 4 if has_revenue else 3
 
     # ── MoM comparison table ─────────────────────────────────────────────
     mom_section = ''
@@ -407,6 +408,42 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         cpm_ = r.spnd / r.imp * 1000 if r.imp else 0
         cells = [r['Site'], _n(r.imp), _m(cpm_), _n(r.st)]
         site_body += _td_row(cells)
+
+    roas_term = '''
+    <div class="glossary-item">
+      <span class="glossary-term">ROAS (Return on Ad Spend)</span> — The amount of revenue generated for every dollar spent on advertising.
+    </div>''' if has_revenue else ''
+
+    glossary_html = f'''
+  <div class="glossary">
+    <div class="glossary-title">Glossary of Terms</div>
+    <div class="glossary-grid">
+      <div class="glossary-item">
+        <span class="glossary-term">Impressions</span> — The total number of times your ad was shown or played.
+      </div>
+      <div class="glossary-item">
+        <span class="glossary-term">CPM (Cost Per Mille)</span> — The cost for every 1,000 ad impressions served.
+      </div>
+      <div class="glossary-item">
+        <span class="glossary-term">CTR (Click-Through Rate)</span> — The percentage of people who saw your ad and chose to click it.
+      </div>
+      <div class="glossary-item">
+        <span class="glossary-term">eCPC (Effective Cost Per Click)</span> — The average cost paid for each individual click.
+      </div>
+      <div class="glossary-item">
+        <span class="glossary-term">Conversions</span> — Specific actions (e.g., Cart stage) completed by users after ad exposure.
+      </div>
+      <div class="glossary-item">
+        <span class="glossary-term">Conversion Rate</span> — The percentage of impressions that successfully resulted in a conversion.
+      </div>{roas_term}
+      <div class="glossary-item">
+        <span class="glossary-term">Attributed Site Traffic</span> — The number of users who visited your website after being exposed to the campaign.
+      </div>
+    </div>
+    <div class="glossary-attribution">
+      <strong style="color:#a8bcc4">Note on Attribution:</strong> Both Conversions and Site Traffic are measured as View-Through + Click-Through. This means the data includes users who clicked an ad and visited immediately, as well as those who saw an ad and visited the site later within the attribution window.
+    </div>
+  </div>'''
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -575,11 +612,52 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     font-weight: 600;
   }}
 
+  .glossary {{
+    margin-top: 48px;
+    border-top: 1px solid rgba(122,147,156,0.25);
+    padding-top: 24px;
+  }}
+  .glossary-title {{
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #7A939C;
+    margin-bottom: 14px;
+  }}
+  .glossary-grid {{
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px 32px;
+  }}
+  .glossary-item {{
+    font-size: 11px;
+    color: #7A939C;
+    line-height: 1.5;
+    padding: 6px 10px;
+    background: rgba(66,85,99,0.45);
+    border-left: 2px solid #425563;
+    border-radius: 0 4px 4px 0;
+  }}
+  .glossary-term {{
+    font-weight: 700;
+    color: #a8bcc4;
+  }}
+  .glossary-attribution {{
+    margin-top: 12px;
+    font-size: 11px;
+    color: #7A939C;
+    padding: 8px 12px;
+    background: rgba(66,85,99,0.3);
+    border-radius: 4px;
+    line-height: 1.6;
+  }}
+
   .footer {{
     text-align: center;
     font-size: 11px;
     color: #7A939C;
-    margin-top: 56px;
+    margin-top: 40px;
     padding-top: 20px;
     border-top: 1px solid rgba(255,255,255,0.1);
   }}
@@ -644,6 +722,10 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     .conv-note {{ background: #f2f4f8; color: #6b7a99; border-left-color: #5BC2E7; }}
     .conv-note strong {{ color: #1a1a1a; }}
     .footer {{ color: #9aa3bc; border-top-color: #e4e7f0; }}
+    .glossary {{ border-top-color: #dde2ef; }}
+    .glossary-item {{ background: #f2f4f8; border-left-color: #c8d0dc; }}
+    .glossary-term {{ color: #4a5568; }}
+    .glossary-attribution {{ background: #f2f4f8; color: #6b7a99; }}
     .section-label {{ color: #22326E; }}
     .kpi-grid {{ grid-template-columns: repeat({kpi_cols}, 1fr); }}
     .upsell-block {{
@@ -714,6 +796,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     </table>
   </div>
 
+{glossary_html}
   <div class="footer">Confidential — prepared for {_h(client_name)}</div>
 
 </div>
