@@ -284,7 +284,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                 curr_cpa_ins = spnd / conv
                 improvement = (first_cpa - curr_cpa_ins) / first_cpa * 100
                 if improvement >= 5:
-                    mom_insight_html = f'''  <div class="insight-box">Strategy Refinement: Since launch, your cost-per-conversion has improved by <strong>{improvement:.0f}%</strong>, reflecting an increasingly optimized path to conversion.</div>'''
+                    mom_insight_html = f'''  <div class="insight-box">Strategy Refinement: Since launch, your cost-per-conversion has improved by <strong>{improvement:.0f}%</strong>, reflecting an increasingly optimised path to conversion.</div>'''
 
         prev_spend = prev_cpa_hist = prev_st_hist = prev_conv_hist = None
         for _, r in hist.iterrows():
@@ -344,7 +344,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         upsell_section = f'''
   <div class="upsell-block">
     <img class="upsell-logo" src="data:image/png;base64,{_LOGO_B64}" alt="MediaWorks">
-    <div class="upsell-headline">Optimization Opportunity: Efficiency Momentum</div>
+    <div class="upsell-headline">Optimisation Opportunity: Efficiency Momentum</div>
     <p class="upsell-body">Your current cost-per-conversion (<strong>{curr_cpa_fmt}</strong>) is trending <strong>{impr_fmt}%</strong> below your 3-month historical benchmark (<strong>{avg_cpa_fmt}</strong>). This indicates the strategy is currently operating at high efficiency. To build on this momentum and increase total conversion volume, we recommend a budget expansion of <strong>{budget_fmt}</strong>. This adjustment would allow us to scale reach while the environment remains favorable.</p>
   </div>'''
 
@@ -444,7 +444,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         top_vr_row = grp_cre_vr.loc[grp_cre_vr['_vr'].idxmax()]
         if campaign_vr > 0:
             variance_pct = (top_vr_row['_vr'] - campaign_vr) / campaign_vr * 100
-            if variance_pct >= 20:
+            if variance_pct > 0:
                 cre_name = _h(str(top_vr_row['Creative']))
                 creative_insight_html = f'''  <div class="insight-box">Traffic Efficiency: <strong>&#8220;{cre_name}&#8221;</strong> was your most effective asset at driving web traffic this month, achieving a Visit Rate <strong>{variance_pct:.0f}%</strong> above the campaign average.</div>'''
 
@@ -455,6 +455,20 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         cpm_ = r.spnd / r.imp * 1000 if r.imp else 0
         cells = [r['Site'], _n(r.imp), _m(cpm_), _n(r.st)]
         site_body += _td_row(cells)
+
+    site_insight_html = ''
+    if not grp_site.empty and imp > 0 and st > 0:
+        campaign_vr = st / imp
+        grp_site_vr = grp_site.copy()
+        grp_site_vr['_vr'] = grp_site_vr.apply(
+            lambda r: r['st'] / r['imp'] if r['imp'] > 0 else 0, axis=1
+        )
+        top_site_row = grp_site_vr.loc[grp_site_vr['_vr'].idxmax()]
+        if campaign_vr > 0:
+            site_variance_pct = (top_site_row['_vr'] - campaign_vr) / campaign_vr * 100
+            if site_variance_pct > 0:
+                site_name = _h(str(top_site_row['Site']))
+                site_insight_html = f'''  <div class="insight-box">Key Environments: <strong>{site_name}</strong> converted impressions to site visits at a rate <strong>{site_variance_pct:.0f}%</strong> above the campaign average — your most efficient placement this month. We have optimised the campaign to direct more of your investment here to maximise overall performance.</div>'''
 
     roas_term = '''
     <div class="glossary-item">
@@ -861,6 +875,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
       <tbody>{site_body}</tbody>
     </table>
   </div>
+  {site_insight_html}
 
 {glossary_html}
   <div class="footer">Confidential — prepared for {_h(client_name)}</div>
