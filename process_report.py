@@ -464,11 +464,10 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
             lambda r: r['st'] / r['imp'] if r['imp'] > 0 else 0, axis=1
         )
         top_site_row = grp_site_vr.loc[grp_site_vr['_vr'].idxmax()]
-        if campaign_vr > 0:
+        if campaign_vr > 0 and top_site_row['_vr'] > 0:
             site_variance_pct = (top_site_row['_vr'] - campaign_vr) / campaign_vr * 100
-            if site_variance_pct > 0:
-                site_name = _h(str(top_site_row['Site']))
-                site_insight_html = f'''  <div class="insight-box">Key Environments: <strong>{site_name}</strong> converted impressions to site visits at a rate <strong>{site_variance_pct:.0f}%</strong> above the campaign average — your most efficient placement this month. We have optimised the campaign to direct more of your investment here to maximise overall performance.</div>'''
+            site_name = _h(str(top_site_row['Site']))
+            site_insight_html = f'''  <div class="insight-box">Key Environments: <strong>{site_name}</strong> converted impressions to site visits at a rate <strong>{site_variance_pct:.0f}%</strong> above the campaign average — your most efficient placement this month. We have optimised the campaign to direct more of your investment here to maximise overall performance.</div>'''
 
     roas_term = '''
     <div class="glossary-item">
