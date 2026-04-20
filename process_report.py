@@ -79,6 +79,15 @@ def extract_report_month(filename):
         return datetime.strptime(dates[0], '%Y-%m-%d').strftime('%B %Y')
     return ''
 
+def _prev_month_label(report_month):
+    try:
+        dt = datetime.strptime(report_month, '%B %Y')
+        prev = dt.replace(year=dt.year - 1, month=12) if dt.month == 1 \
+               else dt.replace(month=dt.month - 1)
+        return prev.strftime('%B %Y')
+    except Exception:
+        return 'Previous Month'
+
 def _h(s):   return _html.escape(str(s))
 def _n(v):   return f"{v:,.0f}"
 def _m(v):   return f"${v:,.2f}"
@@ -87,12 +96,20 @@ def _rx(v):  return f"{v:.2f}x"
 
 _KPI_CYCLE = ['#EF426F', '#5BC2E7']
 
+def _delta_badge(curr_val, prev_val):
+    if not prev_val:
+        return ''
+    pct = (curr_val - prev_val) / abs(prev_val) * 100
+    color = '#5BC2E7' if pct >= 0 else '#EF426F'
+    arrow = '▲' if pct >= 0 else '▼'
+    return f'<span style="color:{color};font-size:10px;margin-left:5px;font-weight:600">{arrow}&nbsp;{abs(pct):.1f}%</span>'
+
 def _kpi_card(label, value, color='#EF426F', trend=None):
     trend_html = ''
     if trend is not None:
-        t_color = '#EF426F' if trend >= 0 else '#5BC2E7'
+        t_color = '#5BC2E7' if trend >= 0 else '#EF426F'
         arrow = '▲' if trend >= 0 else '▼'
-        trend_html = f'<div class="kpi-trend" style="color:{t_color}">{arrow} {abs(trend):.1f}%</div>'
+        trend_html = f'<div class="kpi-trend" style="color:{t_color}">{arrow} {abs(trend):.1f}% vs last month</div>'
     return f'''
         <div class="kpi-card" style="border-left:4px solid {color}">
           <div class="kpi-value">{value}</div>
@@ -127,18 +144,19 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     NA = '<span style="color:#7A939C;font-size:11px">N/A</span>'
 
     if prev_data:
-        pi   = float(prev_data.get('Impressions', 0) or 0)
-        pk   = float(prev_data.get('Clicks', 0) or 0)
-        ps   = float(prev_data.get('Spend', 0) or 0)
-        pc   = float(prev_data.get('Conversions', 0) or 0)
-        pr   = float(prev_data.get('Revenue', 0) or 0)
+        pi    = float(prev_data.get('Impressions', 0) or 0)
+        pk    = float(prev_data.get('Clicks', 0) or 0)
+        ps    = float(prev_data.get('Spend', 0) or 0)
+        pc    = float(prev_data.get('Conversions', 0) or 0)
+        pr    = float(prev_data.get('Revenue', 0) or 0)
+        p_st  = float(prev_data.get('Site Traffic', 0) or 0)
         prev_ctr  = pk / pi * 100  if pi else 0
         prev_cpc  = ps / pk        if pk else 0
         prev_cpm  = ps / pi * 1000 if pi else 0
         prev_cvr  = pc / pi * 100  if pi else 0
         prev_roas = roas(pr, ps)
     else:
-        pi = pk = ps = pc = pr = prev_ctr = prev_cpc = prev_cpm = prev_cvr = prev_roas = 0
+        pi = pk = ps = pc = pr = p_st = prev_ctr = prev_cpc = prev_cpm = prev_cvr = prev_roas = 0
 
     def _t(curr, prev_val):
         if not prev_data or not prev_val:
@@ -165,6 +183,41 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         for i, (lbl, val, trend) in enumerate(kpi_defs)
     )
     kpi_cols = 5 if has_revenue else 4
+
+    # ── MoM comparison table ─────────────────────────────────────────────
+    mom_section = ''
+    if prev_data:
+        prev_month_label = _prev_month_label(report_month)
+        curr_cpa = spnd / conv if conv else None
+        prev_cpa = ps / pc if pc else None
+        NA_mom = '<span style="color:#7A939C;font-size:11px">N/A</span>'
+
+        def _mc(main, curr, prev):
+            badge = _delta_badge(curr, prev) if prev else ''
+            return f'<span>{main}{badge}</span>'
+
+        prev_cpa_str = _m(prev_cpa) if prev_cpa else NA_mom
+        curr_cpa_str = (
+            f'<span>{_m(curr_cpa)}{_delta_badge(curr_cpa, prev_cpa)}</span>'
+            if curr_cpa else NA_mom
+        )
+        mom_head = _th(['Month', 'Spend', 'Site Traffic', 'Conversions', 'CPA'], right_from=1)
+        prev_row = _td_row([prev_month_label, _m(ps), _n(p_st), _n(pc), prev_cpa_str])
+        curr_row = _td_row([
+            report_month,
+            _mc(_m(spnd), spnd, ps),
+            _mc(_n(st), st, p_st),
+            _mc(_n(conv), conv, pc),
+            curr_cpa_str,
+        ])
+        mom_section = f'''
+  <div class="section-label">Month-on-Month Performance</div>
+  <div class="table-wrap">
+    <table>
+      <thead>{mom_head}</thead>
+      <tbody>{prev_row}{curr_row}</tbody>
+    </table>
+  </div>'''
 
     NO_CLICKS = {'CTV', 'Audio'}
     NO_COMP   = {'Display'}
@@ -461,7 +514,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     {kpi_cards}
   </div>
   <div class="conv-note">Conversions tracked: <strong>{_h(conv_label)}</strong></div>
-
+{mom_section}
   <div class="section-label">Channel Performance — Outcomes</div>
   <div class="table-wrap">
     <table>
@@ -574,13 +627,14 @@ def process_csv(csv_bytes, csv_filename, config_df, prev_data=None):
     )
 
     totals_dict = {
-        'Client':      client_name,
-        'Month':       extract_report_month(csv_filename),
-        'Impressions': float(imp),
-        'Clicks':      float(clk),
-        'Spend':       float(spnd),
-        'Conversions': float(conv),
-        'Revenue':     float(rev),
+        'Client':       client_name,
+        'Month':        extract_report_month(csv_filename),
+        'Impressions':  float(imp),
+        'Clicks':       float(clk),
+        'Spend':        float(spnd),
+        'Conversions':  float(conv),
+        'Revenue':      float(rev),
+        'Site Traffic': float(st),
     }
     return client_name, html_str, totals_dict
 

@@ -17,7 +17,7 @@ st.title("📊 Omnichannel Report Processor")
 st.markdown("Upload the client config and all CSV exports for the month. Reports download as a ZIP.")
 
 HISTORY_WS   = "History"
-HISTORY_COLS = ['Client', 'Month', 'Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue']
+HISTORY_COLS = ['Client', 'Month', 'Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue', 'Site Traffic']
 _SCOPES      = ["https://spreadsheets.google.com/feeds",
                 "https://www.googleapis.com/auth/drive"]
 
@@ -48,7 +48,7 @@ def _load_history(ws):
         if not records:
             return pd.DataFrame(columns=HISTORY_COLS)
         df = pd.DataFrame(records)
-        for col in ['Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue']:
+        for col in ['Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue', 'Site Traffic']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
@@ -90,7 +90,7 @@ def _get_prev_data(history_df, client_name, report_month):
         return None
     r = rows.iloc[0]
     return {k: float(r.get(k, 0) or 0)
-            for k in ['Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue']}
+            for k in ['Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue', 'Site Traffic']}
 
 
 def _upsert_history(history_df, totals_row):
