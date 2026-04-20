@@ -3,6 +3,8 @@ import zipfile
 from datetime import datetime
 import pandas as pd
 import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
 from process_report import process_csv, extract_report_month, find_client_config
 
 st.set_page_config(
@@ -16,29 +18,53 @@ st.markdown("Upload the client config and all CSV exports for the month. Reports
 
 HISTORY_WS   = "History"
 HISTORY_COLS = ['Client', 'Month', 'Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue']
+_SCOPES      = ["https://spreadsheets.google.com/feeds",
+                "https://www.googleapis.com/auth/drive"]
 
 
-def _gsheets_conn():
+def _get_gsheet():
     try:
-        from streamlit_gsheets import GSheetsConnection
-        return st.connection('gsheets', type=GSheetsConnection)
+        cfg = dict(st.secrets["connections"]["gsheets"])
+        url = cfg.pop("spreadsheet")
+        cfg.pop("worksheet", None)
+        creds = Credentials.from_service_account_info(cfg, scopes=_SCOPES)
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_url(url)
+        try:
+            return sh.worksheet(HISTORY_WS)
+        except gspread.WorksheetNotFound:
+            ws = sh.add_worksheet(HISTORY_WS, rows=1000, cols=len(HISTORY_COLS))
+            ws.append_row(HISTORY_COLS)
+            return ws
     except Exception:
         return None
 
 
-def _load_history(conn):
-    if conn is None:
+def _load_history(ws):
+    if ws is None:
         return pd.DataFrame(columns=HISTORY_COLS)
     try:
-        df = conn.read(worksheet=HISTORY_WS, ttl=0)
-        if df is None or df.empty:
+        records = ws.get_all_records()
+        if not records:
             return pd.DataFrame(columns=HISTORY_COLS)
+        df = pd.DataFrame(records)
         for col in ['Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
     except Exception:
         return pd.DataFrame(columns=HISTORY_COLS)
+
+
+def _save_history(ws, history_df):
+    if ws is None:
+        return
+    try:
+        rows = [history_df.columns.tolist()] + history_df.fillna('').values.tolist()
+        ws.clear()
+        ws.update('A1', rows)
+    except Exception as e:
+        st.warning(f"History not saved: {e}")
 
 
 def _prev_month_str(report_month):
@@ -94,8 +120,8 @@ if config_file and csv_files:
 
     if st.button("Process all reports", type="primary", use_container_width=True):
         config_df = pd.read_excel(config_file)
-        conn = _gsheets_conn()
-        history_df = _load_history(conn)
+        ws = _get_gsheet()
+        history_df = _load_history(ws)
 
         results, errors = [], []
         zip_buf = io.BytesIO()
@@ -122,11 +148,7 @@ if config_file and csv_files:
                     results.append(client_name)
 
                     history_df = _upsert_history(history_df, totals)
-                    if conn is not None:
-                        try:
-                            conn.update(worksheet=HISTORY_WS, data=history_df)
-                        except Exception as e:
-                            st.warning(f"History not saved for {client_name}: {e}")
+                    _save_history(ws, history_df)
 
                 except Exception as e:
                     errors.append((csv_file.name, str(e)))
