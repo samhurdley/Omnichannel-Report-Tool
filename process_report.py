@@ -88,6 +88,61 @@ def _prev_month_label(report_month):
     except Exception:
         return 'Previous Month'
 
+def _calc_upsell(client_history, report_month, curr_spnd, curr_conv):
+    if client_history is None or client_history.empty or curr_conv <= 0 or curr_spnd <= 0:
+        return None
+    try:
+        curr_dt = datetime.strptime(report_month, '%B %Y')
+
+        def _nth_prev(n):
+            m, y = curr_dt.month - n, curr_dt.year
+            while m <= 0:
+                m += 12; y -= 1
+            return datetime(y, m, 1).strftime('%B %Y')
+
+        prev_months = [_nth_prev(i) for i in range(1, 4)]
+
+        # Frequency gate: block if upsell was triggered in either of the last 2 months
+        for m in prev_months[:2]:
+            rows = client_history[client_history['Month'] == m]
+            if not rows.empty:
+                val = rows.iloc[0].get('Upsell_Triggered', '')
+                if val is True or str(val).upper() == 'TRUE':
+                    return None
+
+        # 3-month benchmark CPA
+        benchmark_cpas = []
+        for m in prev_months:
+            rows = client_history[client_history['Month'] == m]
+            if not rows.empty:
+                r = rows.iloc[0]
+                s = float(r.get('Spend', 0) or 0)
+                c = float(r.get('Conversions', 0) or 0)
+                if s > 0 and c > 0:
+                    benchmark_cpas.append(s / c)
+
+        if not benchmark_cpas:
+            return None
+
+        avg_cpa  = sum(benchmark_cpas) / len(benchmark_cpas)
+        curr_cpa = curr_spnd / curr_conv
+
+        if avg_cpa <= 0:
+            return None
+
+        improvement_pct = (avg_cpa - curr_cpa) / avg_cpa * 100
+        if improvement_pct < 15.0:
+            return None
+
+        return {
+            'curr_cpa':        curr_cpa,
+            'avg_cpa':         avg_cpa,
+            'improvement_pct': improvement_pct,
+            'budget_rec':      curr_spnd * 0.20,
+        }
+    except Exception:
+        return None
+
 def _h(s):   return _html.escape(str(s))
 def _n(v):   return f"{v:,.0f}"
 def _m(v):   return f"${v:,.2f}"
@@ -146,7 +201,7 @@ def _td_row(cells, right_from=1):
 
 
 def generate_html(csv_path, client_name, conv_label, has_revenue,
-                  totals, grp_chan, grp_cre, grp_site, prev_data=None):
+                  totals, grp_chan, grp_cre, grp_site, prev_data=None, upsell_data=None):
     imp, clk, spnd, conv, st, pcv, rev = totals
     _, cpc, cpm, cvr, _ = calc_metrics(imp, clk, spnd, conv, pcv)
     ctr_overall = clk / imp * 100 if imp else 0
@@ -175,26 +230,26 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
             return None
         return (curr - prev_val) / abs(prev_val) * 100
 
+    cpa_kpi      = spnd / conv if conv else 0
+    prev_cpa_kpi = ps   / pc   if pc   else 0
+
     kpi_defs = [
-        ('Total Impressions',  _n(imp),         _t(imp, pi),               False),
-        ('Total Clicks',       _n(clk),         _t(clk, pk),               False),
-        ('Total Spend',        _m(spnd),        _t(spnd, ps),              False),
-        ('CTR',                _p(ctr_overall), _t(ctr_overall, prev_ctr), False),
-        ('eCPC',               _m(cpc),         _t(cpc, prev_cpc),         True),
-        ('eCPM',               _m(cpm),         _t(cpm, prev_cpm),         True),
-        (f'Conversions ({conv_label})', _n(conv), _t(conv, pc),            False),
-        ('Conversion Rate',    _p(cvr),         _t(cvr, prev_cvr),         False),
+        ('Total Investment',              f"${spnd:,.0f}",                    _t(spnd, ps),                              False),
+        ('Total Site Traffic',            _n(st),                             _t(st, p_st),                              False),
+        (f'Total Conversions ({conv_label})', _n(conv),                       _t(conv, pc),                              False),
+        ('CPA',                           _m(cpa_kpi) if conv else NA,        _t(cpa_kpi, prev_cpa_kpi) if conv else None, True),
+        ('eCPM',                          _m(cpm),                            _t(cpm, prev_cpm),                         True),
     ]
     if has_revenue:
         kpi_defs += [
-            ('Attributed Revenue', _m(rev),              _t(rev, pr),                    False),
-            ('ROAS',               _rx(roas(rev, spnd)), _t(roas(rev, spnd), prev_roas), False),
+            ('Revenue', _m(rev),               _t(rev, pr),                    False),
+            ('ROAS',    _rx(roas(rev, spnd)),   _t(roas(rev, spnd), prev_roas), False),
         ]
     kpi_cards = ''.join(
         _kpi_card(lbl, val, _KPI_CYCLE[i % len(_KPI_CYCLE)], trend, inv)
         for i, (lbl, val, trend, inv) in enumerate(kpi_defs)
     )
-    kpi_cols = 5 if has_revenue else 4
+    kpi_cols = 4 if has_revenue else 5
 
     # ── MoM comparison table ─────────────────────────────────────────────
     mom_section = ''
@@ -231,14 +286,26 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     </table>
   </div>'''
 
+    # ── Upsell block ─────────────────────────────────────────────────────
+    upsell_section = ''
+    if upsell_data:
+        curr_cpa_fmt = f"${upsell_data['curr_cpa']:,.2f}"
+        avg_cpa_fmt  = f"${upsell_data['avg_cpa']:,.2f}"
+        impr_fmt     = f"{upsell_data['improvement_pct']:.0f}"
+        budget_fmt   = f"${upsell_data['budget_rec']:,.0f}"
+        upsell_section = f'''
+  <div class="upsell-block">
+    <img class="upsell-logo" src="data:image/png;base64,{_LOGO_B64}" alt="MediaWorks">
+    <div class="upsell-headline">Optimization Opportunity: Efficiency Momentum</div>
+    <p class="upsell-body">Your current cost-per-conversion (<strong>{curr_cpa_fmt}</strong>) is trending <strong>{impr_fmt}%</strong> below your 3-month historical benchmark (<strong>{avg_cpa_fmt}</strong>). This indicates the strategy is currently operating at high efficiency. To build on this momentum and increase total conversion volume, we recommend a budget expansion of <strong>{budget_fmt}</strong>. This adjustment would allow us to scale reach while the environment remains favorable.</p>
+  </div>'''
+
     NO_CLICKS = {'CTV', 'Audio'}
     NO_COMP   = {'Display'}
 
     # ── Table 1: Channel Performance (Outcomes) ─────────────────────────
     out_hdrs = ['Channel', 'Spend %', 'Impressions', 'Attributed Site Traffic',
                 'Conversions', 'Conversion Rate', 'Cost per Conv (CPA)']
-    if has_revenue:
-        out_hdrs += ['Revenue', 'ROAS']
     out_head = _th(out_hdrs)
     out_body = ''
     for _, r in grp_chan.iterrows():
@@ -247,8 +314,6 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         spnd_pct = _p(r.spnd / spnd * 100) if spnd else _p(0)
         cpa = _m(r.spnd / r.conv) if r.conv else NA
         cells = [ch, spnd_pct, _n(r.imp), _n(r.st), _n(r.conv), _p(cvr_), cpa]
-        if has_revenue:
-            cells += [_m(r.rev), _rx(roas(r.rev, r.spnd))]
         out_body += _td_row(cells)
 
     # ── Table 2: Channel Engagement (Efficiency) ──────────────────────────
@@ -290,31 +355,23 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         eng_body += _td_row(cells)
 
     top10_cre = grp_cre.nlargest(10, 'st')
-    cre_hdrs = ['Creative', 'Impressions', 'Spend', 'CTR', 'eCPC',
+    cre_hdrs = ['Creative', 'Impressions', 'CTR', 'eCPC',
                 'Conversions', 'Conversion Rate', 'Completion Rate', 'Attributed Site Traffic']
-    if has_revenue:
-        cre_hdrs += ['Attributed Revenue', 'ROAS']
     cre_head = _th(cre_hdrs)
     cre_body = ''
     for i, (_, r) in enumerate(top10_cre.iterrows()):
         ctr_, cpc_, cpm_, cvr_, comp_ = calc_metrics(r.imp, r.clk, r.spnd, r.conv, r.pcv)
         comp_v = NA if comp_ == 0 else _p(comp_)
-        cells = [r['Creative'], _n(r.imp), _m(r.spnd), _p(ctr_), _m(cpc_),
+        cells = [r['Creative'], _n(r.imp), _p(ctr_), _m(cpc_),
                  _n(r.conv), _p(cvr_), comp_v, _n(r.st)]
-        if has_revenue:
-            cells += [_m(r.rev), _rx(roas(r.rev, r.spnd))]
         cre_body += _td_row(cells)
 
-    site_hdrs = ['Site', 'Impressions', 'Spend', 'CPM', 'Attributed Site Traffic']
-    if has_revenue:
-        site_hdrs += ['Attributed Revenue', 'ROAS']
+    site_hdrs = ['Site', 'Impressions', 'CPM', 'Attributed Site Traffic']
     site_head = _th(site_hdrs)
     site_body = ''
     for _, r in grp_site.iterrows():
         cpm_ = r.spnd / r.imp * 1000 if r.imp else 0
-        cells = [r['Site'], _n(r.imp), _m(r.spnd), _m(cpm_), _n(r.st)]
-        if has_revenue:
-            cells += [_m(r.rev), _rx(roas(r.rev, r.spnd))]
+        cells = [r['Site'], _n(r.imp), _m(cpm_), _n(r.st)]
         site_body += _td_row(cells)
 
     return f'''<!DOCTYPE html>
@@ -493,6 +550,37 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     border-top: 1px solid rgba(255,255,255,0.1);
   }}
 
+  .upsell-block {{
+    position: relative;
+    background: #EF426F;
+    border-radius: 10px;
+    padding: 30px;
+    margin-top: 48px;
+    color: #FFFFFF;
+  }}
+  .upsell-headline {{
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.1px;
+    margin-bottom: 14px;
+    padding-right: 90px;
+  }}
+  .upsell-body {{
+    font-size: 14px;
+    line-height: 1.7;
+    max-width: 88%;
+    margin: 0;
+  }}
+  .upsell-logo {{
+    position: absolute;
+    top: 30px;
+    right: 30px;
+    height: 28px;
+    width: auto;
+    filter: brightness(0) invert(1);
+    opacity: 0.85;
+  }}
+
   @media print {{
     body {{ background: #fff; color: #1a1a1a; }}
     .report-header {{
@@ -524,6 +612,10 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     .footer {{ color: #9aa3bc; border-top-color: #e4e7f0; }}
     .section-label {{ color: #22326E; }}
     .kpi-grid {{ grid-template-columns: repeat({kpi_cols}, 1fr); }}
+    .upsell-block {{
+      background: #EF426F;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }}
     table {{ min-width: unset; font-size: 9px; }}
     th, td {{ padding: 6px 8px; }}
     td:first-child {{ max-width: 180px; }}
@@ -548,6 +640,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
   </div>
   <div class="conv-note">Conversions tracked: <strong>{_h(conv_label)}</strong></div>
 {mom_section}
+{upsell_section}
   <div class="section-label">Channel Performance — Outcomes</div>
   <div class="table-wrap">
     <table>
@@ -595,7 +688,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
 
 
 # ── Core processor ────────────────────────────────────────────────────────────
-def process_csv(csv_bytes, csv_filename, config_df, prev_data=None):
+def process_csv(csv_bytes, csv_filename, config_df, prev_data=None, client_history=None):
     """
     Returns (client_name, html_str, totals_dict).
     Raises ValueError/FileNotFoundError on bad input.
@@ -660,21 +753,25 @@ def process_csv(csv_bytes, csv_filename, config_df, prev_data=None):
         rev=('_rev', 'sum')
     ).reset_index().sort_values('st', ascending=False).head(10)
 
+    upsell_data = _calc_upsell(client_history, extract_report_month(csv_filename),
+                               float(spnd), float(conv))
+
     html_str = generate_html(
         csv_filename, client_name, conv_label, has_revenue,
         (imp, clk, spnd, conv, st, pcv, rev),
-        grp_chan, grp_cre, grp_site, prev_data
+        grp_chan, grp_cre, grp_site, prev_data, upsell_data
     )
 
     totals_dict = {
-        'Client':       client_name,
-        'Month':        extract_report_month(csv_filename),
-        'Impressions':  float(imp),
-        'Clicks':       float(clk),
-        'Spend':        float(spnd),
-        'Conversions':  float(conv),
-        'Revenue':      float(rev),
-        'Site Traffic': float(st),
+        'Client':            client_name,
+        'Month':             extract_report_month(csv_filename),
+        'Impressions':       float(imp),
+        'Clicks':            float(clk),
+        'Spend':             float(spnd),
+        'Conversions':       float(conv),
+        'Revenue':           float(rev),
+        'Site Traffic':      float(st),
+        'Upsell_Triggered':  'TRUE' if upsell_data else 'FALSE',
     }
     return client_name, html_str, totals_dict
 

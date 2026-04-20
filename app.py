@@ -17,7 +17,7 @@ st.title("📊 Omnichannel Report Processor")
 st.markdown("Upload CSV exports for the month. Reports download as a ZIP.")
 
 HISTORY_WS   = "History"
-HISTORY_COLS = ['Client', 'Month', 'Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue', 'Site Traffic']
+HISTORY_COLS = ['Client', 'Month', 'Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue', 'Site Traffic', 'Upsell_Triggered']
 CONFIG_WS    = "Config"
 CONFIG_COLS  = ['Client Name', 'Conversion Column 1', 'Conversion Column 2',
                 'Conversion Column 3', 'Conversion Column 4', 'Site Traffic', 'Revenue']
@@ -172,9 +172,13 @@ if config_df is not None and csv_files:
                     client_candidate = str(config_row['Client Name'])
                     report_month = extract_report_month(csv_file.name)
                     prev_data = _get_prev_data(history_df, client_candidate, report_month)
+                    client_history = (
+                        history_df[history_df['Client'] == client_candidate].copy()
+                        if not history_df.empty and 'Client' in history_df.columns else None
+                    )
 
                     client_name, html_str, totals = process_csv(
-                        csv_bytes, csv_file.name, config_df, prev_data
+                        csv_bytes, csv_file.name, config_df, prev_data, client_history
                     )
                     zf.writestr(f"{client_name}_report.html", html_str.encode("utf-8"))
                     results.append(client_name)
