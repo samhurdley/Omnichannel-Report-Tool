@@ -262,6 +262,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         return f'<span>{main}{badge}</span>'
 
     history_rows_html = ''
+    mom_insight_html  = ''
     if client_history is not None and not client_history.empty:
         def _month_dt(m):
             try:
@@ -273,6 +274,17 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         hist = hist[hist['Month'] != report_month]
         hist['_dt'] = hist['Month'].apply(_month_dt)
         hist = hist.sort_values('_dt')
+
+        if not hist.empty and conv > 0 and spnd > 0:
+            first_r = hist.iloc[0]
+            first_s = float(first_r.get('Spend', 0) or 0)
+            first_c = float(first_r.get('Conversions', 0) or 0)
+            if first_s > 0 and first_c > 0:
+                first_cpa = first_s / first_c
+                curr_cpa_ins = spnd / conv
+                improvement = (first_cpa - curr_cpa_ins) / first_cpa * 100
+                if improvement >= 5:
+                    mom_insight_html = f'''  <div class="insight-box">Strategy Refinement: Since launch, your cost-per-conversion has improved by <strong>{improvement:.0f}%</strong>, reflecting an increasingly optimized path to conversion.</div>'''
 
         prev_spend = prev_cpa_hist = prev_st_hist = prev_conv_hist = None
         for _, r in hist.iterrows():
@@ -319,7 +331,8 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
       <thead>{mom_head}</thead>
       <tbody>{history_rows_html}{curr_row}</tbody>
     </table>
-  </div>'''
+  </div>
+  {mom_insight_html}'''
 
     # ── Upsell block ─────────────────────────────────────────────────────
     upsell_section = ''
@@ -389,6 +402,26 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         ]
         eng_body += _td_row(cells)
 
+    engagement_insight_html = ''
+    best_channel = None
+    best_variance = 0.0
+    for _, r in grp_chan.iterrows():
+        ch = str(r['_chan'])
+        ctr_i, _, _, _, comp_i = calc_metrics(r.imp, r.clk, r.spnd, r.conv, r.pcv)
+        candidates = []
+        if ch in {'Display', 'Video'} and r.clk > 0:
+            candidates.append((ctr_i - 0.15) / 0.15 * 100)
+        if ch in {'CTV', 'Audio'} and r.imp > 0:
+            candidates.append((comp_i - 95.0) / 95.0 * 100)
+        if ch == 'Video' and r.imp > 0:
+            candidates.append((comp_i - 50.0) / 50.0 * 100)
+        for v in candidates:
+            if v > best_variance:
+                best_variance = v
+                best_channel = ch
+    if best_channel:
+        engagement_insight_html = f'''  <div class="insight-box">Performance Lead: <strong>{_h(best_channel)}</strong> is outperforming industry benchmarks by <strong>{best_variance:.0f}%</strong>, driving premium audience engagement.</div>'''
+
     top10_cre = grp_cre.nlargest(10, 'st')
     cre_hdrs = ['Creative', 'Impressions', 'CTR', 'eCPC',
                 'Conversions', 'Conversion Rate', 'Completion Rate', 'Attributed Site Traffic']
@@ -400,6 +433,20 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         cells = [r['Creative'], _n(r.imp), _p(ctr_), _m(cpc_),
                  _n(r.conv), _p(cvr_), comp_v, _n(r.st)]
         cre_body += _td_row(cells)
+
+    creative_insight_html = ''
+    if not top10_cre.empty and imp > 0 and st > 0:
+        campaign_vr = st / imp
+        grp_cre_vr = top10_cre.copy()
+        grp_cre_vr['_vr'] = grp_cre_vr.apply(
+            lambda r: r['st'] / r['imp'] if r['imp'] > 0 else 0, axis=1
+        )
+        top_vr_row = grp_cre_vr.loc[grp_cre_vr['_vr'].idxmax()]
+        if campaign_vr > 0:
+            variance_pct = (top_vr_row['_vr'] - campaign_vr) / campaign_vr * 100
+            if variance_pct >= 20:
+                cre_name = _h(str(top_vr_row['Creative']))
+                creative_insight_html = f'''  <div class="insight-box">Traffic Efficiency: <strong>&#8220;{cre_name}&#8221;</strong> was your most effective asset at driving web traffic this month, achieving a Visit Rate <strong>{variance_pct:.0f}%</strong> above the campaign average.</div>'''
 
     site_hdrs = ['Site', 'Impressions', 'CPM', 'Attributed Site Traffic']
     site_head = _th(site_hdrs)
@@ -612,6 +659,20 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     font-weight: 600;
   }}
 
+  .insight-box {{
+    background: #425563;
+    border-left: 4px solid #5BC2E7;
+    border-radius: 0 6px 6px 0;
+    padding: 14px 20px;
+    margin-top: 12px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: #FFFFFF;
+    line-height: 1.6;
+    font-family: 'Barlow Semi Condensed', sans-serif;
+  }}
+  .insight-box strong {{ color: #FFFFFF; }}
+
   .glossary {{
     margin-top: 48px;
     border-top: 1px solid rgba(122,147,156,0.25);
@@ -722,6 +783,9 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     .conv-note {{ background: #f2f4f8; color: #6b7a99; border-left-color: #5BC2E7; }}
     .conv-note strong {{ color: #1a1a1a; }}
     .footer {{ color: #9aa3bc; border-top-color: #e4e7f0; }}
+    .insight-box {{ background: #eaf6fb; border-left-color: #5BC2E7; color: #1a1a1a;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+    .insight-box strong {{ color: #1a1a1a; }}
     .glossary {{ border-top-color: #dde2ef; }}
     .glossary-item {{ background: #f2f4f8; border-left-color: #c8d0dc; }}
     .glossary-term {{ color: #4a5568; }}
@@ -779,6 +843,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     Completion Rate (CTV, Audio): <strong>95%</strong> &nbsp;·&nbsp;
     Completion Rate (Video): <strong>50%</strong>
   </div>
+  {engagement_insight_html}
 
   <div class="section-label">Top 10 Creatives by Attributed Site Traffic</div>
   <div class="table-wrap">
@@ -787,6 +852,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
       <tbody>{cre_body}</tbody>
     </table>
   </div>
+  {creative_insight_html}
 
   <div class="section-label">Top 10 Sites by Attributed Site Traffic</div>
   <div class="table-wrap">
