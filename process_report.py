@@ -327,7 +327,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         upsell_html  = f'''<div class="upsell-block">
       <img class="upsell-logo" src="data:image/png;base64,{_LOGO_B64}" alt="MediaWorks">
       <div class="upsell-headline">Optimisation Opportunity: Efficiency Momentum</div>
-      <p class="upsell-body">Your current cost-per-conversion (<strong>{curr_cpa_fmt}</strong>) is trending <strong>{impr_fmt}%</strong> below your 3-month benchmark (<strong>{avg_cpa_fmt}</strong>). We recommend a budget increase of <strong>{budget_fmt}</strong> to scale reach while conditions remain favourable.</p>
+      <p class="upsell-body">Your current cost-per-conversion (<strong>{curr_cpa_fmt}</strong>) is trending <strong>{impr_fmt}%</strong> below your 3-month benchmark (<strong>{avg_cpa_fmt}</strong>). We recommend a budget increase of <strong>{budget_fmt}</strong> to maximize volume and capture more market share while your acquisition costs are performing so strongly.</p>
     </div>'''
 
     NO_CLICKS      = {'CTV', 'Audio'}
@@ -571,8 +571,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     {left_card}
     {right_perf}
   </div>
-  {conv_note}
-  {upsell_html}'''
+  {conv_note}'''
 
     # ── MoM slide content ─────────────────────────────────────────────────────
     if mom_insight_text:
@@ -643,6 +642,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         slides.append(('mom', f'''  <h2 class="slide-title">Month on Month Results</h2>
   <div class="slide-main mom-main">
     {mom_inner}
+    {upsell_html}
   </div>
   <div class="slide-foot">{foot_logo}</div>'''))
 
