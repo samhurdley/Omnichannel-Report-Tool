@@ -128,11 +128,20 @@ def _upsert_history(history_df, totals_row):
 
 # ── Load client config from Google Sheets ────────────────────────────────────
 config_df = _load_config_sheet()
+local_history_df = pd.DataFrame(columns=HISTORY_COLS)
 
 if config_df is None:
     st.warning("Google Sheets not configured. Upload client_config.xlsx manually.")
     config_file = st.file_uploader("Upload client_config.xlsx", type=["xlsx"])
-    config_df = pd.read_excel(config_file) if config_file else None
+    if config_file:
+        config_df = pd.read_excel(config_file, sheet_name='Config')
+        try:
+            local_history_df = pd.read_excel(config_file, sheet_name='History')
+            for col in ['Impressions', 'Clicks', 'Spend', 'Conversions', 'Revenue', 'Site Traffic']:
+                if col in local_history_df.columns:
+                    local_history_df[col] = pd.to_numeric(local_history_df[col], errors='coerce').fillna(0)
+        except Exception:
+            pass
 elif config_df.empty:
     st.warning("The 'Config' tab in your Google Sheet is empty. Add client rows to get started.")
     config_df = None
@@ -154,6 +163,8 @@ if config_df is not None and csv_files:
     if st.button("Process all reports", type="primary", use_container_width=True):
         ws = _get_gsheet()
         history_df = _load_history(ws)
+        if history_df.empty and not local_history_df.empty:
+            history_df = local_history_df
 
         results, errors = [], []
         zip_buf = io.BytesIO()

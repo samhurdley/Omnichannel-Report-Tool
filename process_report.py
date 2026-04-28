@@ -79,6 +79,13 @@ def extract_report_month(filename):
         return datetime.strptime(dates[0], '%Y-%m-%d').strftime('%B %Y')
     return ''
 
+def extract_adgroup_label(ag_full):
+    """Return the last underscore-segment of a Trade Desk Ad Group name.
+    e.g. 'IO9711_The Meat Box_Omnichannel_Audio_Rova' → 'Rova'
+         'IO9711_..._Display_Females 35-64'           → 'Females 35-64'
+    """
+    return str(ag_full).split('_')[-1].strip()
+
 def _prev_month_label(report_month):
     try:
         dt = datetime.strptime(report_month, '%B %Y')
@@ -119,7 +126,7 @@ def _calc_upsell(client_history, report_month, curr_spnd, curr_conv):
                 if s > 0 and c > 0:
                     benchmark_cpas.append(s / c)
 
-        if not benchmark_cpas:
+        if len(benchmark_cpas) < 2:
             return None
 
         avg_cpa  = sum(benchmark_cpas) / len(benchmark_cpas)
@@ -149,21 +156,25 @@ def _rx(v):  return f"{v:.2f}x"
 
 _KPI_CYCLE = ['#EF426F', '#5BC2E7']
 
+# If total campaign conversions fall below this threshold, swap CPA for
+# Cost Per Visit (CPV = Spend ÷ Site Traffic) wherever CPA would appear.
+CONV_THRESHOLD = 20
+
 def _delta_badge(curr_val, prev_val, invert=False):
     if not prev_val:
         return ''
     pct = (curr_val - prev_val) / abs(prev_val) * 100
     if abs(pct) < 0.05:
-        return '<span style="color:#6B7280;font-size:10px;margin-left:5px;font-weight:600">no change</span>'
+        return '<span style="color:#6B7280;font-size:12px;margin-left:5px;font-weight:600">no change</span>'
     is_good = pct > 0 if not invert else pct < 0
     color = '#5BC2E7' if is_good else '#EF426F'
     arrow = '▲' if pct > 0 else '▼'
-    return f'<span style="color:{color};font-size:10px;margin-left:5px;font-weight:600">{arrow}&nbsp;{abs(pct):.1f}%</span>'
+    return f'<span style="color:{color};font-size:12px;margin-left:5px;font-weight:600">{arrow}&nbsp;{abs(pct):.1f}%</span>'
 
 def _avg_badge(value, benchmark):
     color = '#5BC2E7' if value >= benchmark else '#EF426F'
     arrow = '▲' if value >= benchmark else '▼'
-    return f'<span style="color:{color};font-size:11px;margin-left:4px">{arrow}</span>'
+    return f'<span style="color:{color};font-size:13px;margin-left:4px">{arrow}</span>'
 
 def _kpi_card(label, value, color='#EF426F', trend=None, invert=False):
     trend_html = ''
@@ -198,9 +209,354 @@ def _td_row(cells, right_from=1):
     return f'<tr>{tds}</tr>'
 
 
+_BB_COLORS = ['#5BC2E7', '#D946EF', '#7C3AED', '#EF426F', '#9BA3AF']
+
+_BAR_COLOR_KEY = (
+    '<span class="bar-key-item"><span class="bar-key-dot" style="background:#22D3EE"></span>Above average</span>'
+    '<span class="bar-key-sep">&middot;</span>'
+    '<span class="bar-key-item"><span class="bar-key-dot" style="background:#FBBF24"></span>Within 15% of average</span>'
+    '<span class="bar-key-sep">&middot;</span>'
+    '<span class="bar-key-item"><span class="bar-key-dot" style="background:#EF426F"></span>Below average</span>'
+)
+
+# Inline SVG icons (Lucide-style)
+_ICON_LIGHTBULB = (
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5'
+    '.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>'
+)
+_ICON_TARGET = (
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/>'
+    '<circle cx="12" cy="12" r="2"/></svg>'
+)
+_ICON_TREND_UP = (
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>'
+    '<polyline points="17 6 23 6 23 12"/></svg>'
+)
+_ICON_COG = (
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    ' stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
+    '<circle cx="12" cy="12" r="3"/>'
+    '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06'
+    'a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09'
+    'A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83'
+    'l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09'
+    'A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83'
+    'l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09'
+    'a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83'
+    'l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09'
+    'a1.65 1.65 0 0 0-1.51 1z"/></svg>'
+)
+
+def _creative_type_dot(name):
+    """Coloured dot based on creative file type."""
+    n = str(name).lower()
+    if any(n.endswith(e) for e in ('.mp4', '.mov', '.avi', '.webm')):
+        c, t = '#5BC2E7', 'Video'
+    elif n.endswith('.gif'):
+        c, t = '#D946EF', 'Animated GIF'
+    elif any(n.endswith(e) for e in ('.jpg', '.jpeg', '.png', '.webp', '.svg')):
+        c, t = '#9BA3AF', 'Static Image'
+    else:
+        c, t = '#7C3AED', 'Rich/Other'
+    return f'<span class="type-dot" style="background:{c}" title="{t}"></span>'
+
+def _metric_card_html(label, value, trend_html='', subtext=''):
+    sub   = f'<div class="mc-sub">{subtext}</div>' if subtext else ''
+    trend = f'<div class="mc-trend">{trend_html}</div>' if trend_html else ''
+    return (f'<div class="metric-card">'
+            f'<div class="mc-label">{label}</div>'
+            f'<div class="mc-value">{value}</div>'
+            f'{trend}{sub}</div>')
+
+def _stacked_budget_bar_html(segments):
+    """segments = [(label, pct, color), ...]  — tall bar with labels inside each segment."""
+    if not segments:
+        return ''
+    bars = ''
+    for l, p, c in segments:
+        inner = (f'<span class="sbb-inner-label">{_h(l)} {p:.0f}%</span>'
+                 if p >= 11 else '')
+        bars += (f'<div class="sbb-seg" style="width:{p:.1f}%;background:{c}"'
+                 f' title="{_h(l)}: {p:.0f}%">{inner}</div>')
+    return f'<div class="sbb-track">{bars}</div>'
+
+def _index_bar_html(value_str, val, avg_val, max_val, is_inverse=False):
+    if max_val <= 0:
+        return f'<span>{value_str}</span>'
+    pct = min(val / max_val * 100, 100)
+    color = '#22D3EE'
+    avg_marker = ''
+    if avg_val and avg_val > 0:
+        avg_pct  = min(avg_val / max_val * 100, 100)
+        is_good  = val <= avg_val if is_inverse else val >= avg_val
+        is_warn  = (not is_good) and (val >= avg_val * 0.85 if not is_inverse else val <= avg_val * 1.15)
+        color    = '#22D3EE' if is_good else ('#FBBF24' if is_warn else '#EF426F')
+        # Marker extends above and below the bar (-4px top, 16px height, 2px wide)
+        avg_marker = (f'<div style="position:absolute;left:{avg_pct:.1f}%;top:-4px;'
+                      f'height:16px;width:2px;background:#fff;z-index:10;'
+                      f'box-shadow:0 0 3px rgba(0,0,0,0.5);border-radius:1px"></div>')
+    return (f'<div class="ibar-cell">'
+            f'<span class="ibar-val" style="color:{color}">{value_str}</span>'
+            f'<div class="ibar-track">'
+            f'<div class="ibar-fill" style="width:{pct:.1f}%;background:{color}"></div>'
+            f'{avg_marker}</div></div>')
+
+def _insight_box_html(title, body, variant='cyan'):
+    if variant == 'rose':
+        color, bg, border, icon = '#EF426F', 'rgba(239,68,68,0.10)', 'rgba(239,68,68,0.30)', _ICON_TARGET
+    elif variant == 'green':
+        color, bg, border, icon = '#10B981', 'rgba(16,185,129,0.10)', 'rgba(16,185,129,0.30)', _ICON_TREND_UP
+    else:
+        color, bg, border, icon = '#22D3EE', 'rgba(6,182,212,0.10)', 'rgba(6,182,212,0.30)', _ICON_LIGHTBULB
+    return (f'<div class="insight-v2" style="background:{bg};border-color:{border}">'
+            f'<div class="iv2-bar" style="background:{color}"></div>'
+            f'<div class="iv2-inner">'
+            f'<div class="iv2-header">'
+            f'<span class="iv2-icon" style="color:{color}">{icon}</span>'
+            f'<h4 class="iv2-title" style="color:{color}">{title}</h4>'
+            f'</div>'
+            f'<p class="iv2-body">{body}</p>'
+            f'</div></div>')
+
+def _mom_sparkline_svg(months, convs, curr_month, curr_conv, height=140, label='Conversions'):
+    """Returns SVG sparkline string. Height is dynamic so the chart fills its container.
+    Returns '' if fewer than 2 data points total."""
+    all_months = list(months) + [curr_month]
+    all_convs  = list(convs)  + [float(curr_conv)]
+    if len(all_months) < 2:
+        return ''
+    if len(all_months) > 6:
+        all_months = all_months[-6:]
+        all_convs  = all_convs[-6:]
+    n = len(all_months)
+    W = 280
+    H = max(height, 80)
+    PAD_L, PAD_R, PAD_T, PAD_B = 34, 6, 10, 22
+    area_w   = W - PAD_L - PAD_R
+    area_h   = H - PAD_T - PAD_B
+    bar_slot = area_w / n
+    bar_w    = bar_slot * 0.58
+    max_conv = max(all_convs) or 1
+
+    def _fmt(v):
+        if v >= 10000: return f'{v/1000:.0f}K'
+        if v >= 1000:  return f'{v/1000:.1f}K'
+        return str(int(round(v)))
+
+    # Faint horizontal grid lines + y-axis labels at 0%, 50%, 100%
+    grid = ''
+    for frac in (0.0, 0.5, 1.0):
+        y   = PAD_T + area_h - frac * area_h
+        val = frac * max_conv
+        grid += (
+            f'<line x1="{PAD_L}" y1="{y:.1f}" x2="{W - PAD_R}" y2="{y:.1f}"'
+            f' stroke="rgba(255,255,255,0.07)" stroke-width="1"/>'
+        )
+        grid += (
+            f'<text x="{PAD_L - 4}" y="{y + 3.5:.1f}" text-anchor="end"'
+            f' font-size="10" fill="#4B5563" font-family="sans-serif">{_fmt(val)}</text>'
+        )
+
+    bars = ''
+    labels = ''
+    for i, (m, cv) in enumerate(zip(all_months, all_convs)):
+        bx = PAD_L + i * bar_slot + (bar_slot - bar_w) / 2
+        bh = max((cv / max_conv) * area_h, 2.0)
+        by = PAD_T + area_h - bh
+        bars += (
+            f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}"'
+            f' height="{bh:.1f}" rx="2" fill="#5BC2E7"/>'
+        )
+        cx  = PAD_L + i * bar_slot + bar_slot / 2
+        lbl = m.split()[0][:3] if m else ''
+        labels += (
+            f'<text x="{cx:.1f}" y="{H - 5}" text-anchor="middle"'
+            f' font-size="11" fill="#4B5563" font-family="sans-serif">{_h(lbl)}</text>'
+        )
+
+    return (
+        f'<svg viewBox="0 0 {W} {H}" preserveAspectRatio="none"'
+        f' style="width:100%;height:100%;display:block;min-height:80px">'
+        f'{grid}{bars}{labels}</svg>'
+    )
+
+
+def _h_th(label, right=False, raw=False):
+    """Generate a <th> cell; raw=True skips escaping (allows HTML sub-labels)."""
+    align = ' class="right"' if right else ''
+    inner = label if raw else _h(label)
+    return f'<th{align}>{inner}</th>'
+
+
+# ── Ad Group Performance helpers ──────────────────────────────────────────────
+_VISIT_RATE_CHANNELS_AGP = {'CTV', 'Audio', 'Video'}
+
+def _agp_bar_row(label, val_str, val, avg_val, is_inverse=False):
+    """One row in the ad-group performance chart.
+    avg_val always maps to 50% bar width so the avg line is centred.
+    is_inverse=True  → lower value is better (CPA).
+    is_inverse=False → higher value is better (Visit Rate).
+    """
+    bar_pct = min((val / avg_val) * 50.0, 100.0) if avg_val > 0 else 50.0
+    is_good = (val <= avg_val) if is_inverse else (val >= avg_val)
+    is_warn = (not is_good) and (val >= avg_val * 0.85 if not is_inverse else val <= avg_val * 1.15)
+    color   = '#22D3EE' if is_good else ('#FBBF24' if is_warn else '#EF426F')
+    return (
+        f'<div class="agp-row">'
+        f'<div class="agp-row-left">'
+        f'<span class="agp-ag-name">{_h(label)}</span>'
+        f'<span class="agp-val" style="color:{color}">{val_str}</span>'
+        f'</div>'
+        f'<div class="agp-track">'
+        f'<div class="agp-fill" style="width:{bar_pct:.1f}%;background:{color}"></div>'
+        f'<div class="agp-avg-line"></div>'
+        f'</div>'
+        f'</div>'
+    )
+
+def _agp_card_html(chan, chan_rows, use_cpa):
+    """Build one channel card. Returns '' if fewer than 2 valid rows."""
+    is_inverse = use_cpa  # CPA: lower better; Visit Rate: higher better
+
+    if use_cpa:
+        valid = chan_rows[chan_rows['conv'] > 0].copy()
+        if len(valid) < 2:
+            return ''
+        valid['_val']     = valid['spnd'] / valid['conv']
+        valid['_val_str'] = valid['_val'].apply(_m)
+        avg_val    = valid['spnd'].sum() / valid['conv'].sum()
+        avg_str    = _m(avg_val)
+        metric_lbl = 'Cost per Conv (CPA)'
+        valid = valid.sort_values('_val', ascending=True)   # lowest CPA first = best
+    else:
+        valid = chan_rows[(chan_rows['imp'] > 0) & (chan_rows['st'] > 0)].copy()
+        if len(valid) < 2:
+            return ''
+        valid['_val']     = valid['st'] / valid['imp'] * 100
+        valid['_val_str'] = valid['_val'].apply(_p)
+        avg_val    = valid['st'].sum() / valid['imp'].sum() * 100
+        avg_str    = _p(avg_val)
+        metric_lbl = 'Visit Rate'
+        valid = valid.sort_values('_val', ascending=False)  # highest VR first = best
+
+    valid = valid.head(4)
+
+    rows_html = ''.join(
+        _agp_bar_row(r['_ag_label'], r['_val_str'], r['_val'], avg_val, is_inverse=is_inverse)
+        for _, r in valid.iterrows()
+    )
+
+    # Only highlight performers that are genuinely above average (cyan = positive)
+    above_avg = valid[valid['_val'] <= avg_val] if is_inverse else valid[valid['_val'] >= avg_val]
+    top_labels = above_avg.iloc[:2]['_ag_label'].tolist()
+    if top_labels:
+        label_html = ' &amp; '.join(f'<strong>{_h(l)}</strong>' for l in top_labels)
+        footer_html = (
+            f'<div class="agp-card-footer">'
+            f'<span class="agp-footer-icon">{_ICON_COG}</span>'
+            f'<span class="agp-footer-text">Budget optimised toward {label_html}</span>'
+            f'</div>'
+        )
+    else:
+        footer_html = ''
+
+    return (
+        f'<div class="agp-card">'
+        f'<div class="agp-card-header">'
+        f'<span class="agp-chan-name">{_h(chan)}</span>'
+        f'<div class="agp-metric-info">'
+        f'<span class="agp-metric-name">{_h(metric_lbl)}</span>'
+        f'<span class="agp-avg-chip">'
+        f'<span class="agp-avg-tick"></span> Blended Avg {_h(avg_str)}'
+        f'</span>'
+        f'</div>'
+        f'</div>'
+        f'<div class="agp-rows">{rows_html}</div>'
+        f'{footer_html}'
+        f'</div>'
+    )
+
+
+def _agp_remarketing_hub_html(remark_by_chan, display_total_conv, prosp_by_chan=None):
+    """Build the Remarketing Hub summary card from {chan: rows_df}.
+    Shows one aggregated row per channel with a % vs prospecting-average badge.
+    Returns '' if no remarketing data exists."""
+    if not remark_by_chan:
+        return ''
+
+    RM_COLOR = '#60A5FA'   # blue-400 — calm, less intense than the previous purple
+    RM_MUTED = '#93C5FD'   # blue-300
+    rows_html = ''
+
+    for chan, rows in remark_by_chan.items():
+        use_cpa   = False
+        prosp     = (prosp_by_chan or {}).get(chan, pd.DataFrame())
+
+        if use_cpa:
+            total_spnd = rows['spnd'].sum()
+            total_conv = rows['conv'].sum()
+            val        = total_spnd / total_conv if total_conv > 0 else None
+            val_str    = _m(val) if val is not None else 'N/A'
+            metric_lbl = 'Cost per Conversion (CPA)'
+            p_spnd     = prosp['spnd'].sum() if not prosp.empty else 0
+            p_conv     = prosp['conv'].sum() if not prosp.empty else 0
+            prosp_avg  = p_spnd / p_conv if p_conv > 0 else None
+        else:
+            total_imp  = rows['imp'].sum()
+            total_st   = rows['st'].sum()
+            val        = total_st / total_imp * 100 if total_imp > 0 else None
+            val_str    = _p(val) if val is not None else 'N/A'
+            metric_lbl = 'Visit Rate'
+            p_imp      = prosp['imp'].sum() if not prosp.empty else 0
+            p_st       = prosp['st'].sum()  if not prosp.empty else 0
+            prosp_avg  = p_st / p_imp * 100 if p_imp > 0 else None
+
+        # % vs prospecting-average badge
+        vs_html = ''
+        if val is not None and prosp_avg and prosp_avg > 0:
+            pct      = (val - prosp_avg) / prosp_avg * 100
+            is_good  = (pct < 0) if use_cpa else (pct > 0)   # lower CPA = good, higher VR = good
+            vs_color = '#22D3EE' if is_good else '#EF426F'
+            arrow    = '▲' if pct > 0 else '▼'
+            label    = 'below' if pct < 0 else 'above'
+            vs_html  = (f'<span class="agp-rm-vs" style="color:{vs_color}">'
+                        f'{arrow} {abs(pct):.0f}% {label} {_h(chan)} avg</span>')
+
+        rows_html += (
+            f'<div class="agp-rm-row">'
+            f'<div class="agp-rm-left">'
+            f'<span class="agp-rm-chan">{_h(chan)}</span>'
+            f'<span class="agp-rm-lbl">{_h(metric_lbl)}</span>'
+            f'</div>'
+            f'<div class="agp-rm-right">'
+            f'<span class="agp-rm-val" style="color:{RM_COLOR}">{val_str}</span>'
+            f'{vs_html}'
+            f'</div>'
+            f'</div>'
+        )
+
+    return (
+        f'<div class="agp-card agp-card-rm">'
+        f'<div class="agp-card-header" style="border-bottom-color:rgba(96,165,250,0.25)">'
+        f'<span class="agp-chan-name" style="color:{RM_COLOR}">Remarketing</span>'
+        f'<div class="agp-metric-info">'
+        f'<span class="agp-metric-name" style="color:{RM_MUTED}">Bottom-of-Funnel Audiences</span>'
+        f'</div>'
+        f'</div>'
+        f'<div class="agp-rows agp-rm-rows">{rows_html}</div>'
+        f'</div>'
+    )
+
+
 def generate_html(csv_path, client_name, conv_label, has_revenue,
                   totals, grp_chan, grp_cre, grp_site, prev_data=None, upsell_data=None,
-                  client_history=None):
+                  client_history=None, grp_adgroup=None):
     imp, clk, spnd, conv, st, pcv, rev, uh = (*totals, 0) if len(totals) == 7 else totals
     _, cpc, cpm, cvr, _ = calc_metrics(imp, clk, spnd, conv, pcv)
     report_month = extract_report_month(csv_path)
@@ -238,6 +594,13 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     cpa_kpi      = spnd / conv if conv else 0
     prev_cpa_kpi = ps   / pc   if pc   else 0
 
+    # Low-conversion fallback: if total conversions < CONV_THRESHOLD, swap CPA
+    # for Cost Per Visit (CPV = Spend ÷ Site Traffic) in the overview card,
+    # MoM table, and sparkline.
+    low_conv = (conv < CONV_THRESHOLD)
+    cpv      = spnd / st if st > 0 else 0
+    prev_cpv = ps   / p_st if p_st > 0 else 0
+
     # ── MoM table ─────────────────────────────────────────────────────────────
     def _mc(main, curr, prev, invert=False):
         badge = _delta_badge(curr, prev, invert=invert) if prev is not None else ''
@@ -247,6 +610,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     mom_insight_text  = ''
     has_mom           = False
     mom_table         = ''
+    sp_months, sp_convs, sp_cpas, sp_sts = [], [], [], []
 
     if client_history is not None and not client_history.empty:
         def _month_dt(m):
@@ -271,45 +635,68 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                 if improvement >= 5:
                     mom_insight_text = f'Since launch, your cost-per-conversion has improved by <strong>{improvement:.0f}%</strong>, reflecting an increasingly optimised path to conversion.'
 
-        prev_spend = prev_cpa_hist = prev_st_hist = prev_conv_hist = None
+        prev_spend = prev_cpa_hist = prev_st_hist = prev_conv_hist = prev_cpv_hist = None
         for _, r in hist.iterrows():
             s    = float(r.get('Spend', 0) or 0)
             c    = float(r.get('Conversions', 0) or 0)
             st_h = float(r.get('Site Traffic', 0) or 0)
-            cpa_h = s / c if c else None
-            cpa_str = (
-                _mc(_m(cpa_h), cpa_h, prev_cpa_hist, invert=True)
-                if cpa_h is not None else NA_mom
-            )
+            if low_conv:
+                cpv_h = s / st_h if st_h > 0 else None
+                last_col_str = (
+                    _mc(_m(cpv_h), cpv_h, prev_cpv_hist, invert=True)
+                    if cpv_h is not None else NA_mom
+                )
+                prev_cpv_hist = cpv_h
+            else:
+                cpa_h = s / c if c else None
+                last_col_str = (
+                    _mc(_m(cpa_h), cpa_h, prev_cpa_hist, invert=True)
+                    if cpa_h is not None else NA_mom
+                )
+                prev_cpa_hist = cpa_h
             history_rows_html += _td_row([
                 str(r['Month']),
                 _mc(_m(s), s, prev_spend),
                 _mc(_n(st_h), st_h, prev_st_hist),
                 _mc(_n(c), c, prev_conv_hist),
-                cpa_str,
+                last_col_str,
             ])
-            prev_spend, prev_st_hist, prev_conv_hist, prev_cpa_hist = s, st_h, c, cpa_h
+            prev_spend, prev_st_hist, prev_conv_hist = s, st_h, c
+            sp_months.append(str(r['Month']))
+            sp_convs.append(c)
+            sp_cpas.append(s / c if c > 0 else 0)
+            sp_sts.append(st_h)
 
     if history_rows_html or prev_data:
         has_mom = True
-        curr_cpa      = spnd / conv if conv else None
         p_spend_badge = float(prev_data['Spend']) if prev_data else None
         p_st_badge    = float(prev_data['Site Traffic']) if prev_data else None
         p_conv_badge  = float(prev_data['Conversions']) if prev_data else None
-        p_cpa_badge   = (float(prev_data['Spend']) / float(prev_data['Conversions'])
-                         if prev_data and float(prev_data.get('Conversions', 0)) else None)
-        curr_cpa_str = (
-            _mc(_m(curr_cpa), curr_cpa, p_cpa_badge, invert=True)
-            if curr_cpa is not None else NA_mom
-        )
+        if low_conv:
+            curr_cpv_val = spnd / st if st > 0 else None
+            p_cpv_badge  = (float(prev_data['Spend']) / float(prev_data['Site Traffic'])
+                            if prev_data and float(prev_data.get('Site Traffic', 0)) else None)
+            curr_last_col = (
+                _mc(_m(curr_cpv_val), curr_cpv_val, p_cpv_badge, invert=True)
+                if curr_cpv_val is not None else NA_mom
+            )
+            mom_head = _th(['Month', 'Spend', 'Site Traffic', 'Conversions', 'Cost Per Visit'], right_from=1)
+        else:
+            curr_cpa      = spnd / conv if conv else None
+            p_cpa_badge   = (float(prev_data['Spend']) / float(prev_data['Conversions'])
+                             if prev_data and float(prev_data.get('Conversions', 0)) else None)
+            curr_last_col = (
+                _mc(_m(curr_cpa), curr_cpa, p_cpa_badge, invert=True)
+                if curr_cpa is not None else NA_mom
+            )
+            mom_head = _th(['Month', 'Spend', 'Site Traffic', 'Conversions', 'CPA'], right_from=1)
         curr_row = _td_row([
             f'<strong>{report_month}</strong>',
             _mc(_m(spnd), spnd, p_spend_badge),
             _mc(_n(st), st, p_st_badge),
             _mc(_n(conv), conv, p_conv_badge),
-            curr_cpa_str,
+            curr_last_col,
         ])
-        mom_head  = _th(['Month', 'Spend', 'Site Traffic', 'Conversions', 'CPA'], right_from=1)
         mom_table = f'''<div class="table-wrap">
       <table>
         <thead>{mom_head}</thead>
@@ -324,10 +711,13 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         avg_cpa_fmt  = f"${upsell_data['avg_cpa']:,.2f}"
         impr_fmt     = f"{upsell_data['improvement_pct']:.0f}"
         budget_fmt   = f"${upsell_data['budget_rec']:,.0f}"
-        upsell_html  = f'''<div class="upsell-block">
+        upsell_body  = (f'Your current cost-per-conversion (<strong>{curr_cpa_fmt}</strong>) is trending '
+                        f'<strong>{impr_fmt}%</strong> below your 3-month benchmark (<strong>{avg_cpa_fmt}</strong>). '
+                        f'We recommend a budget increase of <strong>{budget_fmt}</strong> to maximise volume and '
+                        f'capture more market share while your acquisition costs are performing so strongly.')
+        upsell_html  = f'''<div class="upsell-wrap">
       <img class="upsell-logo" src="data:image/png;base64,{_LOGO_B64}" alt="MediaWorks">
-      <div class="upsell-headline">Optimisation Opportunity: Efficiency Momentum</div>
-      <p class="upsell-body">Your current cost-per-conversion (<strong>{curr_cpa_fmt}</strong>) is trending <strong>{impr_fmt}%</strong> below your 3-month benchmark (<strong>{avg_cpa_fmt}</strong>). We recommend a budget increase of <strong>{budget_fmt}</strong> to maximize volume and capture more market share while your acquisition costs are performing so strongly.</p>
+      {_insight_box_html('Optimisation Opportunity: Efficiency Momentum', upsell_body, variant='green')}
     </div>'''
 
     NO_CLICKS      = {'CTV', 'Audio'}
@@ -349,7 +739,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         out_body += _td_row([ch, spnd_pct, _n(r.imp), _n(r.st), _n(r.conv), _p(cvr_), cpa])
 
     # ── Channel Engagement table ──────────────────────────────────────────────
-    eng_hdrs = ['Channel', 'Impressions', 'Clicks', 'CTR', 'eCPC', 'eCPM', 'Completion Rate']
+    eng_hdrs = ['Channel', 'Impressions', 'Clicks', 'CTR', 'eCPC', 'CPM', 'Completion Rate']
     eng_head = _th(eng_hdrs)
     eng_body = ''
     for _, r in grp_chan.iterrows():
@@ -396,12 +786,15 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                 best_variance = v
                 best_channel  = ch
     if best_channel:
-        engagement_insight_html = f'<div class="insight-box">Performance Lead: <strong>{_h(best_channel)}</strong> is outperforming industry benchmarks by <strong>{best_variance:.0f}%</strong>, driving premium audience engagement.</div>'
+        engagement_insight_html = _insight_box_html(
+            'Performance Lead',
+            f'<strong>{_h(best_channel)}</strong> is outperforming industry benchmarks by <strong>{best_variance:.0f}%</strong>, driving premium audience engagement.'
+        )
 
     # ── Awareness table (Video, CTV, Audio) ──────────────────────────────────
     AWARE_CH = {'Video', 'CTV', 'Audio'}
     aware_rows = grp_chan[grp_chan['_chan'].isin(AWARE_CH)]
-    aw_head = _th(['Channel', 'Impressions', 'Reach', 'Frequency', 'eCPM', 'Completion Rate'])
+    aw_head = _th(['Channel', 'Impressions', 'Reach', 'Frequency', 'CPM', 'Completion Rate'])
     aw_body = ''
     aw_best_ch, aw_best_var = None, 0.0
     for _, r in aware_rows.iterrows():
@@ -421,7 +814,10 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
             aw_best_var, aw_best_ch = var, ch
         aw_body += _td_row([ch, _n(r.imp), reach_cell, freq_cell, _m(cpm_), comp_cell])
     aw_framing = '<div class="context-box">These channels are built for <strong>reach and recall</strong> — not clicks. The goal is to get in front of as many people as possible, as often as needed, at an efficient cost per thousand impressions.</div>'
-    aw_lead = f'<div class="insight-box">Performance Lead: <strong>{_h(aw_best_ch)}</strong> is outperforming industry benchmarks by <strong>{aw_best_var:.0f}%</strong>, driving premium audience engagement.</div>' if aw_best_ch else ''
+    aw_lead = _insight_box_html(
+        'Performance Lead',
+        f'<strong>{_h(aw_best_ch)}</strong> is outperforming industry benchmarks by <strong>{aw_best_var:.0f}%</strong>, driving premium audience engagement.'
+    ) if aw_best_ch else ''
     awareness_insight_html = aw_lead + aw_framing
 
     # ── Conversion table (Display) ────────────────────────────────────────────
@@ -439,16 +835,33 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                              _n(r.st), visit_rate, _n(r.conv), cpa_cell])
 
     # ── Top 10 Creatives table ────────────────────────────────────────────────
-    top10_cre = grp_cre.nlargest(10, 'st')
-    cre_hdrs  = ['Creative', 'Impressions', 'CTR', 'eCPC',
-                 'Conversions', 'Conversion Rate', 'Completion Rate', 'Attributed Site Traffic']
-    cre_head  = _th(cre_hdrs)
+    top10_cre  = grp_cre.nlargest(10, 'st')
+    cre_vrs    = [r['st'] / r['imp'] if r['imp'] > 0 else 0
+                  for _, r in top10_cre.iterrows()]
+    avg_cre_vr = sum(cre_vrs) / len(cre_vrs) if cre_vrs else 0
+    max_cre_vr = max(cre_vrs) if cre_vrs else 0
+    # Header for Visit Rate column includes avg sub-label with white marker tick
+    vr_avg_label = (_p(avg_cre_vr * 100) if avg_cre_vr > 0 else '')
+    vr_th_label  = (f'Visit Rate'
+                    f'<div class="th-sub"><span class="th-avg-tick"></span> Avg {vr_avg_label}</div>'
+                    if vr_avg_label else 'Visit Rate')
+    cre_head = (
+        f'<tr>{_h_th("Creative")}{_h_th("Impressions",right=True)}'
+        f'{_h_th("CTR",right=True)}{_h_th("eCPC",right=True)}'
+        f'{_h_th("Completion Rate",right=True)}{_h_th("Attributed Site Traffic",right=True)}'
+        f'{_h_th(vr_th_label,right=True,raw=True)}</tr>'
+    )
     cre_body  = ''
-    for _, r in top10_cre.iterrows():
+    for idx, (_, r) in enumerate(top10_cre.iterrows()):
         ctr_, cpc_, cpm_, cvr_, comp_ = calc_metrics(r.imp, r.clk, r.spnd, r.conv, r.pcv)
-        comp_v = NA if comp_ == 0 else _p(comp_)
-        cre_body += _td_row([r['Creative'], _n(r.imp), _p(ctr_), _m(cpc_),
-                             _n(r.conv), _p(cvr_), comp_v, _n(r.st)])
+        comp_v   = NA if comp_ == 0 else _p(comp_)
+        vr       = cre_vrs[idx]
+        vr_bar   = _index_bar_html(_p(vr * 100), vr * 100, avg_cre_vr * 100, max_cre_vr * 100)
+        cre_name = (f'<span class="name-cell">'
+                    f'{_creative_type_dot(r["Creative"])}'
+                    f'<span class="name-text">{_h(str(r["Creative"]))}</span>'
+                    f'</span>')
+        cre_body += _td_row([cre_name, _n(r.imp), _p(ctr_), _m(cpc_), comp_v, _n(r.st), vr_bar])
 
     creative_insight_html = ''
     if not top10_cre.empty and imp > 0 and st > 0:
@@ -461,15 +874,35 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
             variance_pct = (top_vr_row['_vr'] - campaign_vr) / campaign_vr * 100
             if variance_pct > 0:
                 cre_name = _h(str(top_vr_row['Creative']))
-                creative_insight_html = f'<div class="insight-box">Traffic Efficiency: <strong>&#8220;{cre_name}&#8221;</strong> was your most effective asset at driving web traffic this month, achieving a Visit Rate <strong>{variance_pct:.0f}%</strong> above the campaign average.</div>'
+                creative_insight_html = _insight_box_html(
+                    'Traffic Efficiency',
+                    f'<strong>&#8220;{cre_name}&#8221;</strong> was your most effective asset at driving web traffic this month, achieving a Visit Rate <strong>{variance_pct:.0f}%</strong> above the campaign average.'
+                )
 
     # ── Top 10 Sites table ────────────────────────────────────────────────────
-    site_hdrs = ['Site', 'Impressions', 'CPM', 'Attributed Site Traffic']
-    site_head = _th(site_hdrs)
     site_body = ''
-    for _, r in grp_site.iterrows():
-        cpm_ = r.spnd / r.imp * 1000 if r.imp else 0
-        site_body += _td_row([r['Site'], _n(r.imp), _m(cpm_), _n(r.st)])
+    site_vrs     = [r.st / r.imp * 100 if r.imp > 0 else 0 for _, r in grp_site.iterrows()]
+    site_vrs_pos = [v for v in site_vrs if v > 0]
+    avg_site_vr  = sum(site_vrs_pos) / len(site_vrs_pos) if site_vrs_pos else 0
+    max_site_vr  = max(site_vrs_pos) if site_vrs_pos else 0
+    vr_avg_label = _p(avg_site_vr) if avg_site_vr > 0 else ''
+    vr_th_label  = (f'Visit Rate'
+                    f'<div class="th-sub"><span class="th-avg-tick"></span> Blended Avg {vr_avg_label}</div>'
+                    if vr_avg_label else 'Visit Rate')
+    site_head = (
+        f'<tr>{_h_th("Publisher Site")}{_h_th("Impressions",right=True)}'
+        f'{_h_th("CPM",right=True)}{_h_th("Attributed Site Traffic",right=True)}'
+        f'{_h_th(vr_th_label,right=True,raw=True)}</tr>'
+    )
+    for idx, (_, r) in enumerate(grp_site.iterrows()):
+        cpm_    = r.spnd / r.imp * 1000 if r.imp else 0
+        vr_val  = site_vrs[idx]
+        vr_bar  = _index_bar_html(_p(vr_val), vr_val, avg_site_vr, max_site_vr) if r.imp > 0 else NA
+        site_name = (f'<span class="name-cell">'
+                     f'<span class="site-dot"></span>'
+                     f'<span class="name-text">{_h(str(r["Site"]))}</span>'
+                     f'</span>')
+        site_body += _td_row([site_name, _n(r.imp), _m(cpm_), _n(r.st), vr_bar])
 
     site_insight_html = ''
     if not grp_site.empty and imp > 0 and st > 0:
@@ -481,7 +914,10 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         if campaign_vr > 0 and top_site_row['_vr'] > 0:
             site_variance_pct = (top_site_row['_vr'] - campaign_vr) / campaign_vr * 100
             site_name         = _h(str(top_site_row['Site']))
-            site_insight_html = f'<div class="insight-box">Key Environments: <strong>{site_name}</strong> converted impressions to site visits at a rate <strong>{site_variance_pct:.0f}%</strong> above the campaign average — your most efficient placement this month. We have optimised the campaign to direct more of your investment here to maximise overall performance.</div>'
+            site_insight_html = _insight_box_html(
+                'Key Environments',
+                f'<strong>{site_name}</strong> converted impressions to site visits at a rate <strong>{site_variance_pct:.0f}%</strong> above the campaign average — your most efficient placement this month. We have optimised the campaign to direct more of your investment here to maximise overall performance.'
+            )
 
     # ── Glossary ──────────────────────────────────────────────────────────────
     roas_term = '''
@@ -512,73 +948,137 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         <span class="glossary-term">Attributed Site Traffic</span> — The number of users who visited your website after being exposed to the campaign.
       </div>'''
 
+    # ── Ad Group Performance slide ────────────────────────────────────────────
+    agp_cards_html = ''
+    agp_card_count = 0
+    if grp_adgroup is not None and not grp_adgroup.empty:
+        _chan_order   = ['CTV', 'Audio', 'Video', 'Display']
+        chans_present = grp_adgroup['_chan'].unique().tolist()
+        sorted_chans  = [c for c in _chan_order if c in chans_present]
+        sorted_chans += [c for c in chans_present if c not in _chan_order]
+
+        # Separate remarketing rows from prospecting for every channel
+        remark_by_chan = {}
+        prosp_by_chan  = {}
+        for chan in sorted_chans:
+            rows    = grp_adgroup[grp_adgroup['_chan'] == chan].copy()
+            rm_mask = rows['_ag_label'].str.lower().str.contains('remarketing', na=False)
+            if rm_mask.any():
+                remark_by_chan[chan] = rows[rm_mask]
+            prosp_by_chan[chan] = rows[~rm_mask]
+
+        # CPA threshold uses prospecting-only Display conv so remarketing doesn't
+        # inflate the gate and skew prospecting charts
+        disp_prosp      = prosp_by_chan.get('Display', pd.DataFrame(columns=['conv']))
+        prosp_disp_conv = float(disp_prosp['conv'].sum()) if not disp_prosp.empty else 0
+        # Full Display conv (incl. remarketing) — used only for the remarketing hub
+        display_total_conv = float(
+            grp_adgroup[grp_adgroup['_chan'] == 'Display']['conv'].sum()
+        ) if 'Display' in grp_adgroup['_chan'].values else 0
+
+        for chan in sorted_chans:
+            use_cpa = False
+            card    = _agp_card_html(chan, prosp_by_chan[chan], use_cpa)
+            if card:
+                agp_cards_html += card
+                agp_card_count += 1
+
+        rm_hub = _agp_remarketing_hub_html(remark_by_chan, display_total_conv, prosp_by_chan)
+        if rm_hub:
+            agp_cards_html += rm_hub
+            agp_card_count += 1
+
     # ── Shared logo tags ──────────────────────────────────────────────────────
     foot_logo  = f'<img class="foot-logo"  src="data:image/png;base64,{_LOGO_B64}" alt="MediaWorks">'
     cover_logo = f'<img class="cover-logo" src="data:image/png;base64,{_LOGO_B64}" alt="MediaWorks">'
 
     # ── Overview (KPI) slide content ──────────────────────────────────────────
-    def _ov_row(label, value, trend_curr, trend_prev, invert=False, first=False):
-        tl  = _trend_line(trend_curr, trend_prev, invert)
-        div = '' if first else '<div class="ov-divider"></div>'
-        return f'''{div}<div class="ov-row">
-          <span class="ov-label">{label}</span>
-          <div class="ov-num-wrap"><span class="ov-num">{value}</span>{tl}</div>
-        </div>'''
+    conv_note = f'<div class="ov-conv-note">Conversions tracked: <strong>{_h(conv_label)}</strong></div>'
 
-    reach_row = _ov_row('Reach', _n(uh), 0, 0, False) if uh else ''
+    def _mc_trend(curr, prev, invert=False):
+        if not prev:
+            return ''
+        pct = (curr - prev) / abs(prev) * 100
+        if abs(pct) < 0.05:
+            return '<span style="color:#6B7280;font-size:13px">no change vs last month</span>'
+        is_good = pct < 0 if invert else pct > 0
+        color   = '#5BC2E7' if is_good else '#EF426F'
+        arrow   = '&#9650;' if pct > 0 else '&#9660;'
+        return f'<span style="color:{color};font-size:13px;font-weight:600">{arrow} {abs(pct):.1f}% vs last month</span>'
 
-    budget_chips = ''
-    for _, r in grp_chan.sort_values('spnd', ascending=False).iterrows():
+    mc_invest  = _metric_card_html('Investment',   f'${spnd:,.0f}', _mc_trend(spnd, ps))
+    mc_traffic = _metric_card_html('Site Traffic', _n(st),          _mc_trend(st, p_st))
+    mc_conv    = _metric_card_html('Conversions',  _n(conv),        _mc_trend(conv, pc), conv_label)
+    if low_conv:
+        mc_cpa = _metric_card_html('Cost Per Visit', _m(cpv) if st else NA,
+                                   _mc_trend(cpv, prev_cpv, invert=True))
+    else:
+        mc_cpa = _metric_card_html('CPA', _m(cpa_kpi) if conv else NA,
+                                   _mc_trend(cpa_kpi, prev_cpa_kpi, invert=True))
+
+    budget_segs = []
+    for i, (_, r) in enumerate(grp_chan.sort_values('spnd', ascending=False).iterrows()):
         if r.spnd <= 0:
             continue
         pct = r.spnd / spnd * 100 if spnd else 0
-        budget_chips += f'<span class="budget-chip"><span class="budget-chip-label">{_h(str(r["_chan"]))}</span><span class="budget-chip-pct">{pct:.0f}%</span></span>'
-    budget_section = f'''<div class="ov-divider" style="margin-top:8px"></div>
-      <div class="budget-split-row">
-        <span class="ov-label" style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:#5BC2E7;font-weight:700">Budget Split</span>
-        <div class="budget-chips">{budget_chips}</div>
-      </div>''' if budget_chips else ''
+        budget_segs.append((str(r['_chan']), pct, _BB_COLORS[i % len(_BB_COLORS)]))
 
-    left_card = f'''<div class="ov-card">
-      <div class="ov-card-title">Overview of the Month</div>
-      {_ov_row('Investment',              f"${spnd:,.0f}", spnd, ps,   False, True)}
-      {_ov_row('Total Impressions',       _n(imp),         imp,  pi,   False)}
-      {reach_row}
-      {_ov_row('Attributed Site Traffic', _n(st),          st,   p_st, False)}
-      {budget_section}
+    budget_panel = f'''<div class="ov-lower-panel ov-budget-col">
+      <div class="ov-panel-label">Budget Split &amp; Impact</div>
+      {_stacked_budget_bar_html(budget_segs)}
     </div>'''
 
-    def _perf_row(label, value, trend_curr, trend_prev, invert=False, first=False):
-        tl  = _trend_line(trend_curr, trend_prev, invert)
-        div = '' if first else '<div class="perf-divider"></div>'
-        return f'''{div}<div class="perf-row">
-          <span class="perf-label">{label}</span>
-          <span class="perf-num">{value}</span>{tl}
-        </div>'''
-
-    right_perf = f'''<div class="ov-perf">
-      <div class="ov-perf-title">Performance</div>
-      {_perf_row(f'Total Conversions ({conv_label})', _n(conv),                       conv,    pc,          False, True)}
-      {_perf_row('CPA',                               _m(cpa_kpi) if conv else NA,    cpa_kpi, prev_cpa_kpi, True)}'''
     if has_revenue:
-        right_perf += _perf_row('Revenue', _m(rev),             rev,            pr,         False)
-        right_perf += _perf_row('ROAS',    _rx(roas(rev, spnd)), roas(rev, spnd), prev_roas, False)
-    right_perf += '\n    </div>'
+        curr_roas    = roas(rev, spnd)
+        roas_trend_h = _mc_trend(curr_roas, prev_roas)
+        rev_trend_h  = _mc_trend(rev, pr)
+        rev_gen_panel = f'''<div class="ov-lower-panel ov-revgen-col">
+      <div class="ov-panel-label">Revenue Gen</div>
+      <div class="ov-panel-big">{_m(rev)}</div>
+      {f'<div class="ov-panel-trend">{rev_trend_h}</div>' if rev_trend_h else ""}
+      <div class="ov-panel-roas"><span class="ov-panel-key">ROAS</span> <strong>{_rx(curr_roas)}</strong>{(" &nbsp;" + roas_trend_h) if roas_trend_h else ""}</div>
+    </div>'''
+        metric_grid = f'<div class="ov-metric-grid">{mc_invest}{mc_traffic}{mc_conv}{mc_cpa}</div>'
+    else:
+        if low_conv:
+            cpv_trend_h = _mc_trend(cpv, prev_cpv, invert=True)
+            rev_gen_panel = f'''<div class="ov-lower-panel ov-revgen-col">
+      <div class="ov-panel-label">Cost Per Visit</div>
+      <div class="ov-panel-big">{_m(cpv) if st else NA}</div>
+      {f'<div class="ov-panel-trend">{cpv_trend_h}</div>' if cpv_trend_h else ""}
+    </div>'''
+        else:
+            cpa_trend_h = _mc_trend(cpa_kpi, prev_cpa_kpi, invert=True)
+            rev_gen_panel = f'''<div class="ov-lower-panel ov-revgen-col">
+      <div class="ov-panel-label">Cost per Conversion</div>
+      <div class="ov-panel-big">{_m(cpa_kpi) if conv else NA}</div>
+      {f'<div class="ov-panel-trend">{cpa_trend_h}</div>' if cpa_trend_h else ""}
+    </div>'''
+        metric_grid = f'<div class="ov-metric-grid three">{mc_invest}{mc_traffic}{mc_conv}</div>'
 
-    conv_note = f'<div class="ov-conv-note">Conversions tracked: <strong>{_h(conv_label)}</strong></div>'
+    lower_row = f'<div class="ov-lower-row">{budget_panel}{rev_gen_panel}</div>'
 
-    kpi_inner = f'''<div class="overview-split">
-    {left_card}
-    {right_perf}
-  </div>
-  {conv_note}'''
+    # Small metric key shown below conv_note
+    _ov_key_items = []
+    if low_conv:
+        _ov_key_items.append('<strong>CPV</strong> Cost Per Visit &mdash; Spend &div; Site Traffic')
+    else:
+        _ov_key_items.append('<strong>CPA</strong> Cost per Acquisition &mdash; Spend &div; Conversions')
+    if has_revenue:
+        _ov_key_items.append('<strong>ROAS</strong> Return on Ad Spend &mdash; Revenue &div; Spend')
+    ov_key = ('<div class="ov-key">'
+              + ' <span class="ov-key-sep">&middot;</span> '.join(
+                  f'<span class="ov-key-item">{t}</span>' for t in _ov_key_items)
+              + '</div>') if _ov_key_items else ''
+
+    kpi_inner = f'''{metric_grid}
+  {lower_row}
+  {conv_note}
+  {ov_key}'''
 
     # ── MoM slide content ─────────────────────────────────────────────────────
     if mom_insight_text:
-        takeaway = f'''<div class="takeaway-card">
-      <div class="takeaway-title">Key Takeaway</div>
-      <p class="takeaway-body">{mom_insight_text}</p>
-    </div>'''
+        takeaway = _insight_box_html('Key Takeaway', mom_insight_text)
     else:
         conv_chg = _t(conv, pc)
         st_chg   = _t(st, p_st)
@@ -592,22 +1092,37 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
             col   = '#5BC2E7' if st_chg >= 0 else '#EF426F'
             lines.append(f'Site Traffic <span style="color:{col};font-weight:700">{arrow} {abs(st_chg):.0f}%</span> month-on-month.')
         body = ' '.join(lines) if lines else 'Historical data is accumulating as the campaign continues.'
-        takeaway = f'''<div class="takeaway-card">
-      <div class="takeaway-title">Month Summary</div>
-      <p class="takeaway-body">{body}</p>
+        takeaway = _insight_box_html('Month Summary', body)
+
+    if low_conv:
+        spark_svg       = _mom_sparkline_svg(sp_months, sp_sts, report_month, float(st), label='Site Traffic')
+        sparkline_title = 'Site Traffic — Monthly Trend'
+    else:
+        spark_svg       = _mom_sparkline_svg(sp_months, sp_convs, report_month, float(conv))
+        sparkline_title = 'Conversions — Monthly Trend'
+    sparkline_html = ''
+    if spark_svg:
+        sparkline_html = f'''<div class="sparkline-wrap">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;color:#5BC2E7;margin-bottom:10px">{sparkline_title}</div>
+      {spark_svg}
     </div>'''
+
+    right_col = (
+        f'<div class="mom-right">{sparkline_html}{takeaway}</div>'
+        if sparkline_html else f'<div class="mom-right">{takeaway}</div>'
+    )
 
     mom_inner = f'''<div class="mom-split">
     <div class="mom-left">{mom_table}</div>
-    {takeaway}
+    {right_col}
   </div>'''
 
     # ── Table slide helper ────────────────────────────────────────────────────
     def _tslide(title, table_html, extra=''):
         nrows = table_html.count('<tr') - 1  # subtract header row
-        td_pad = max(15, min(40, 110 // max(nrows, 1)))
-        sparse_style = f' style="--td-pad:{td_pad}px"' if nrows < 7 else ''
-        return f'''  <h2 class="slide-title">{title}</h2>
+        td_pad = max(6, min(32, 80 // max(nrows, 1)))
+        sparse_style = f' style="--td-pad:{td_pad}px"'
+        return f'''  <h2 class="slide-title slide-title-left">{title}</h2>
   <div class="slide-main table-main">
     <div class="table-wrap"{sparse_style}>{table_html}</div>
     {extra}
@@ -631,7 +1146,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
   </div>'''))
 
     # Overview (KPI)
-    slides.append(('overview', f'''  <h2 class="slide-title">Campaign Overview</h2>
+    slides.append(('overview', f'''  <h2 class="slide-title slide-title-left">Campaign Overview</h2>
   <div class="slide-main overview-main">
     {kpi_inner}
   </div>
@@ -639,40 +1154,158 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
 
     # MoM (conditional)
     if has_mom:
-        slides.append(('mom', f'''  <h2 class="slide-title">Month on Month Results</h2>
+        slides.append(('mom', f'''  <h2 class="slide-title slide-title-left">Month on Month Results</h2>
   <div class="slide-main mom-main">
     {mom_inner}
     {upsell_html}
   </div>
   <div class="slide-foot">{foot_logo}</div>'''))
 
-    # Awareness (Video, CTV, Audio) — only if any of those channels ran
-    if not aware_rows.empty:
-        aw_note = '<div class="bench-note"><span style="color:#5BC2E7;font-weight:700">&#9650;</span> Above benchmark &nbsp;&#183;&nbsp; <span style="color:#EF426F;font-weight:700">&#9660;</span> Below benchmark &nbsp;&#183;&nbsp; <strong>Industry Average Benchmarks:</strong> Completion (CTV, Audio) <strong>95%</strong> &nbsp;&#183;&nbsp; Completion (Video) <strong>50%</strong></div>'
-        slides.append(('table', _tslide('Awareness Performance',
-            f'<table><thead>{aw_head}</thead><tbody>{aw_body}</tbody></table>',
-            awareness_insight_html + aw_note)))
+    # ── Build awareness / display content blocks ─────────────────────────────
+    # Minimal grey info boxes — sit under their respective table
+    aw_info = (
+        '<div class="context-box"><strong style="color:#C4B5D4">Awareness Channels</strong>'
+        ' — Video, CTV &amp; Audio are built for <strong>reach and recall</strong>, not immediate'
+        ' conversions. The goal is to put your brand in front of as many of the right people as'
+        ' possible, as efficiently as possible.</div>'
+    )
+    disp_info = (
+        '<div class="context-box"><strong style="color:#C4B5D4">Display Advertising</strong>'
+        ' — Display is built for <strong>direct response</strong>, driving site visits and'
+        ' conversions. The visit rate measures how effectively ad exposure translates into'
+        ' real website traffic.</div>'
+    )
 
-    # Conversion (Display) — only if Display ran
+    # Display performance insight: share of total campaign site traffic
+    disp_st      = float(conv_rows['st'].sum()) if not conv_rows.empty else 0.0
+    disp_st_pct  = disp_st / st * 100 if st > 0 else 0.0
+    disp_perf_insight = (
+        _insight_box_html(
+            'Display Performance',
+            f'Display delivered <strong>{_n(int(disp_st))}</strong> site visits this month'
+            f' — <strong>{disp_st_pct:.0f}%</strong> of total campaign traffic,'
+            f' making it the primary driver of direct response in the mix.',
+            variant='cyan'
+        ) if disp_st > 0 and disp_st_pct > 0 else ''
+    )
+
+    # Combined benchmark note spans all metrics shown across both tables
+    _bench_parts = [
+        '<span style="color:#5BC2E7;font-weight:700">&#9650;</span> Above benchmark',
+        '<span style="color:#EF426F;font-weight:700">&#9660;</span> Below benchmark',
+        '<strong>Industry Average Benchmarks:</strong>',
+        'Completion (CTV &amp; Audio) <strong>95%</strong>',
+        'Completion (Video) <strong>50%</strong>',
+    ]
     if not conv_rows.empty:
-        cv_insight = '<div class="context-box">Display is built for <strong>direct response</strong> — driving clicks, site visits, and conversions. The visit rate shows how effectively exposure is turning into real website traffic.</div>'
+        _bench_parts.append('CTR (Display) <strong>0.15%</strong>')
+    combined_bench = (
+        '<div class="bench-note">'
+        + ' &nbsp;&#183;&nbsp; '.join(_bench_parts)
+        + '</div>'
+    )
+
+    aw_table_html = f'<table><thead>{aw_head}</thead><tbody>{aw_body}</tbody></table>'
+    cv_table_html = f'<table><thead>{cv_head}</thead><tbody>{cv_body}</tbody></table>'
+
+    if not aware_rows.empty and not conv_rows.empty:
+        # ── Combined channel performance slide ───────────────────────────────
+        # 4-cell grid: left col = tables+info; right col = performance insights
+        # Each row of the grid keeps its left section in line with its right insight.
+        slides.append(('chperf', f'''  <h2 class="slide-title slide-title-left">Channel Performance</h2>
+  <div class="slide-main ch-perf-main">
+    <div class="ch-perf-body">
+      <div class="ch-perf-section">
+        <div class="ch-perf-col-label">Awareness — Video, CTV &amp; Audio</div>
+        <div class="table-wrap">{aw_table_html}</div>
+        {aw_info}
+      </div>
+      <div class="ch-perf-insight-cell">
+        {aw_lead}
+      </div>
+      <div class="ch-perf-section">
+        <div class="ch-perf-col-label">Display — Conversion &amp; Traffic</div>
+        <div class="table-wrap">{cv_table_html}</div>
+        {disp_info}
+      </div>
+      <div class="ch-perf-insight-cell">
+        {disp_perf_insight}
+      </div>
+    </div>
+    {combined_bench}
+  </div>
+  <div class="slide-foot">{foot_logo}</div>'''))
+
+    elif not aware_rows.empty:
+        # Awareness only
+        slides.append(('table', _tslide('Awareness Performance',
+            aw_table_html, awareness_insight_html + aw_info + combined_bench)))
+
+    elif not conv_rows.empty:
+        # Display only
         slides.append(('table', _tslide('Display Conversion Performance',
-            f'<table><thead>{cv_head}</thead><tbody>{cv_body}</tbody></table>',
-            cv_insight)))
+            cv_table_html, disp_info + disp_perf_insight + combined_bench)))
 
-    # Top Creatives
-    slides.append(('table', _tslide('Top 10 Creatives by Site Traffic',
-        f'<table><thead>{cre_head}</thead><tbody>{cre_body}</tbody></table>',
-        creative_insight_html)))
+    # Shared inline colour key used on AGP, Sites and Creatives slides
+    _vr_key_html = (
+        '<div class="inline-key">'
+        + _BAR_COLOR_KEY
+        + '<span class="bar-key-sep">&middot;</span>'
+        + '<span class="bar-key-note">Visit Rate: Site Visits &div; Impressions</span>'
+        + '</div>'
+    )
 
-    # Top Sites
+    # Ad Group Performance — one card per channel with ≥2 valid ad groups
+    if agp_card_count >= 2:
+        slides.append(('agp', f'''  <h2 class="slide-title slide-title-left">Platform and Audience Performance</h2>
+  <div class="slide-main agp-main">
+    <div class="agp-grid" data-count="{agp_card_count}">
+      {agp_cards_html}
+    </div>
+    {_vr_key_html}
+  </div>
+  <div class="slide-foot">{foot_logo}</div>'''))
+
+    def _optim_note(kind, top_names):
+        names_html = ' &amp; '.join(f'<strong>{_h(n)}</strong>' for n in top_names)
+        return (
+            f'<div class="tbl-optim-note">'
+            f'<span class="agp-footer-icon">{_ICON_COG}</span>'
+            f'<span class="tbl-optim-text">Budget optimised towards top performing {kind} such as {names_html}</span>'
+            f'</div>'
+        )
+
+    # Top Sites — only sites with above-average visit rate (matches cyan rows in the table)
+    if not grp_site.empty:
+        _site_perf = grp_site[(grp_site['st'] > 0) & (grp_site['imp'] > 0)].copy()
+        _site_perf['_vr'] = _site_perf['st'] / _site_perf['imp']
+        _site_avg_vr = _site_perf['st'].sum() / _site_perf['imp'].sum()
+        _above_avg_sites = _site_perf[_site_perf['_vr'] >= _site_avg_vr].nlargest(2, '_vr')
+        top_site_names = [str(r['Site']) for _, r in _above_avg_sites.iterrows()]
+    else:
+        top_site_names = []
+    site_optim = _optim_note('sites', top_site_names) if top_site_names else ''
     slides.append(('table', _tslide('Top 10 Sites by Site Traffic',
         f'<table><thead>{site_head}</thead><tbody>{site_body}</tbody></table>',
-        site_insight_html)))
+        site_insight_html + site_optim + _vr_key_html)))
+
+    # Top Creatives — only creatives with above-average visit rate (matches cyan rows in the table)
+    if not top10_cre.empty:
+        _cre_perf = top10_cre[(top10_cre['imp'] > 0) & (top10_cre['st'] > 0)].copy()
+        _cre_perf['_vr'] = _cre_perf['st'] / _cre_perf['imp']
+        _cre_avg_vr = _cre_perf['st'].sum() / _cre_perf['imp'].sum()
+        _above_avg_cre = _cre_perf[_cre_perf['_vr'] >= _cre_avg_vr].nlargest(2, '_vr')
+        top_cre_names = [str(r['Creative']) for _, r in _above_avg_cre.iterrows()]
+    else:
+        top_cre_names = []
+    cre_optim = _optim_note('creatives', top_cre_names) if top_cre_names else ''
+    slides.append(('table', _tslide('Top 10 Creatives by Site Traffic',
+        f'<table><thead>{cre_head}</thead><tbody>{cre_body}</tbody></table>',
+        creative_insight_html + cre_optim + _vr_key_html)))
 
     # Glossary
     gloss_attr = '<div class="glossary-attribution"><strong style="color:#C4B5D4">Note on Attribution:</strong> Both Conversions and Site Traffic are measured as View-Through + Click-Through — users who clicked an ad immediately, plus those who saw an ad and visited later within the attribution window.</div>'
-    slides.append(('table', f'''  <h2 class="slide-title">Glossary of Terms</h2>
+    slides.append(('table', f'''  <h2 class="slide-title slide-title-left">Glossary of Terms</h2>
   <div class="slide-main">
     <div class="glossary-grid">{glossary_items}</div>
     {gloss_attr}
@@ -707,14 +1340,14 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
   html, body {{
     height: 100%; overflow: hidden;
     font-family: 'Barlow Semi Condensed', sans-serif;
-    background: #111; color: #fff; font-size: 15px; line-height: 1.5;
+    background: #111; color: #fff; font-size: 16px; line-height: 1.5;
   }}
 
   .deck {{ position: absolute; width: 1440px; height: 810px; overflow: hidden; transform-origin: top left; }}
   .slide {{ position: absolute; inset: 0; display: none; flex-direction: column; overflow: hidden; }}
   .slide.active {{ display: flex; }}
 
-  /* Cover */
+  /* ── Cover (unchanged) ─────────────────────────────────────────────────── */
   .slide-cover {{ background: #1A1A1B; overflow-y: auto; }}
   .slide-cover::before {{
     content: ''; position: absolute; top: -200px; right: -200px;
@@ -739,151 +1372,418 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
   .cover-client {{ font-size: 60px; font-weight: 700; letter-spacing: -0.6px; line-height: 1.05; margin-bottom: 10px; }}
   .cover-report-title {{ font-size: 22px; font-weight: 300; color: #9BA3AF; margin-bottom: 18px; letter-spacing: 0.03em; }}
   .cover-month {{ font-size: 34px; font-weight: 700; color: #EF426F; letter-spacing: -0.2px; margin-bottom: 8px; }}
-  .cover-date {{ font-size: 14px; color: #6B7280; margin-bottom: 72px; }}
-  .cover-hint {{ font-size: 12px; color: #4B5563; margin-bottom: 8px; letter-spacing: 0.05em; }}
-  .cover-confidential {{ font-size: 11px; color: #374151; }}
+  .cover-date {{ font-size: 15px; color: #6B7280; margin-bottom: 72px; }}
+  .cover-hint {{ font-size: 14px; color: #4B5563; margin-bottom: 8px; letter-spacing: 0.05em; }}
+  .cover-confidential {{ font-size: 13px; color: #374151; }}
 
-  /* Slide chrome */
+  /* ── Slide chrome ──────────────────────────────────────────────────────── */
   .slide-title {{
-    font-size: 40px; font-weight: 700; text-align: center; letter-spacing: -0.3px;
-    padding: 36px 80px 24px; flex-shrink: 0;
+    font-size: 30px; font-weight: 700; letter-spacing: -0.2px;
+    padding: 28px 72px 18px; flex-shrink: 0; text-align: center;
   }}
+  .slide-title-left {{ text-align: left; }}
   .slide-main {{ flex: 1; min-height: 0; overflow-y: auto; padding: 0 72px 12px; }}
-  .slide-main.table-main {{ display: flex; flex-direction: column; justify-content: center; }}
+  .slide-main.table-main {{ display: flex; flex-direction: column; justify-content: flex-start; }}
   .slide-foot {{
     height: 40px; min-height: 40px; flex-shrink: 0;
     display: flex; align-items: center; justify-content: flex-end;
     padding: 0 72px; border-top: 1px solid rgba(255,255,255,0.05);
   }}
+  .inline-key {{
+    flex-shrink: 0; margin-top: 10px;
+    display: flex; align-items: center; gap: 0; flex-wrap: nowrap;
+    font-size: 12px; color: #9BA3AF;
+  }}
+  .bar-key-item {{ display: flex; align-items: center; gap: 6px; white-space: nowrap; }}
+  .bar-key-dot {{ width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }}
+  .bar-key-sep {{ margin: 0 12px; color: #6B7280; }}
+  .bar-key-note {{ color: #6B7280; white-space: nowrap; }}
   .foot-logo {{ height: 20px; width: auto; filter: brightness(0) invert(1); opacity: 0.4; }}
-  .foot-credit {{ margin-top: 20px; font-size: 11px; color: #374151; text-align: center; }}
+  .foot-credit {{ margin-top: 20px; font-size: 13px; color: #374151; text-align: center; }}
 
-  /* Overview / KPI slide */
+  /* ── MetricCards ───────────────────────────────────────────────────────── */
+  .ov-metric-grid {{
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px;
+  }}
+  .ov-metric-grid.three {{ grid-template-columns: repeat(3, 1fr); }}
+  .metric-card {{
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 18px 22px;
+  }}
+  .mc-label {{
+    font-size: 14px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.12em; color: #9BA3AF; margin-bottom: 8px;
+  }}
+  .mc-value {{
+    font-size: 48px; font-weight: 700; color: #fff;
+    font-variant-numeric: tabular-nums; line-height: 1.1; margin-bottom: 6px;
+  }}
+  .mc-trend {{ font-size: 13px; }}
+  .mc-sub {{ font-size: 13px; color: #6B7280; margin-top: 2px; }}
+
+  /* ── Overview lower row ─────────────────────────────────────────────────── */
   .overview-main {{
     display: flex; flex-direction: column; justify-content: center;
-    padding-top: 8px; padding-bottom: 8px;
+    padding-top: 4px; padding-bottom: 4px;
   }}
-  .overview-split {{
-    display: grid; grid-template-columns: 44fr 52fr; gap: 48px; align-items: center;
+  .ov-lower-row {{
+    display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 14px;
   }}
-  .ov-card {{
-    background: #252526; border-radius: 16px; padding: 40px 44px;
-    display: flex; flex-direction: column;
+  .ov-lower-panel {{
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 20px 24px;
   }}
-  .ov-card-title {{
-    font-size: 11px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.14em; color: #5BC2E7; margin-bottom: 24px;
+  .ov-budget-col {{ display: flex; flex-direction: column; gap: 14px; }}
+  .ov-revgen-col {{ display: flex; flex-direction: column; justify-content: center; gap: 6px; }}
+  .ov-panel-label {{
+    font-size: 14px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.14em; color: #9BA3AF;
   }}
-  .ov-divider {{ height: 1px; background: rgba(255,255,255,0.07); }}
-  .ov-row {{
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 16px; padding: 20px 0;
+  .ov-panel-big {{
+    font-size: 56px; font-weight: 700; color: #fff;
+    font-variant-numeric: tabular-nums; line-height: 1.05;
   }}
-  .ov-label {{ font-size: 15px; color: #9BA3AF; max-width: 150px; line-height: 1.3; }}
-  .ov-num-wrap {{ text-align: right; }}
-  .ov-num {{ font-size: 42px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.0; display: block; }}
-  .trend-line {{ font-size: 11px; font-weight: 600; letter-spacing: 0.04em; margin-top: 4px; }}
-  .ov-perf {{ display: flex; flex-direction: column; padding: 4px 0; }}
-  .ov-perf-title {{
-    font-size: 11px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.14em; color: #5BC2E7; margin-bottom: 20px;
-  }}
-  .perf-divider {{ height: 1px; background: rgba(255,255,255,0.07); margin: 4px 0; }}
-  .perf-row {{ padding: 20px 0; }}
-  .perf-label {{ font-size: 15px; color: #9BA3AF; display: block; margin-bottom: 6px; }}
-  .perf-num {{
-    font-size: 72px; font-weight: 700; color: #EF426F;
-    font-variant-numeric: tabular-nums; line-height: 1.0; display: block; letter-spacing: -1px;
-  }}
+  .ov-panel-trend {{ font-size: 14px; font-weight: 600; }}
+  .ov-panel-roas {{ font-size: 15px; color: #9BA3AF; margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.07); padding-top: 10px; }}
+  .ov-panel-roas strong {{ color: #fff; font-size: 18px; font-weight: 700; }}
+  .ov-panel-key {{ font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; }}
   .ov-conv-note {{
-    margin-top: 18px; font-size: 12px; color: #6B7280; display: inline-block;
-    padding: 7px 14px; background: rgba(255,255,255,0.03);
+    font-size: 14px; color: #6B7280; display: inline-block;
+    padding: 6px 12px; background: rgba(255,255,255,0.03);
     border-left: 3px solid #5BC2E7; border-radius: 0 6px 6px 0;
   }}
   .ov-conv-note strong {{ color: #fff; font-weight: 600; }}
-  .budget-split-row {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0 4px; }}
-  .budget-chips {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }}
-  .budget-chip {{ display: flex; align-items: center; gap: 5px; background: rgba(255,255,255,0.06); border-radius: 6px; padding: 4px 10px; }}
-  .budget-chip-label {{ font-size: 11px; color: #9BA3AF; }}
-  .budget-chip-pct {{ font-size: 13px; font-weight: 700; color: #fff; }}
-
-  /* MoM slide */
-  .mom-main {{ display: flex; flex-direction: column; justify-content: center; padding-top: 8px; }}
-  .mom-split {{ display: grid; grid-template-columns: 58fr 38fr; gap: 32px; align-items: start; }}
-  .mom-left .table-wrap {{ border-radius: 14px; }}
-  .takeaway-card {{
-    background: #252526; border-radius: 14px; padding: 36px 32px;
-    display: flex; flex-direction: column; justify-content: center; align-self: stretch;
+  .trend-line {{ font-size: 13px; font-weight: 600; letter-spacing: 0.04em; margin-top: 4px; }}
+  .ov-key {{
+    margin-top: 10px; display: flex; align-items: center; flex-wrap: wrap;
+    font-size: 12px; color: #4B5563; gap: 0;
   }}
-  .takeaway-title {{ font-size: 26px; font-weight: 700; margin-bottom: 20px; letter-spacing: -0.1px; }}
-  .takeaway-body {{ font-size: 17px; color: #D1D5DB; line-height: 1.75; font-weight: 400; }}
-  .takeaway-body strong {{ color: #EF426F; }}
+  .ov-key-item {{ color: #4B5563; }}
+  .ov-key-item strong {{ color: #6B7280; font-weight: 700; }}
+  .ov-key-sep {{ margin: 0 10px; color: #374151; }}
 
-  /* Tables */
-  .table-wrap {{ background: #252526; border-radius: 12px; overflow-x: auto; }}
+  /* ── Stacked budget bar ─────────────────────────────────────────────────── */
+  .sbb-track {{
+    display: flex; height: 48px; border-radius: 10px; overflow: hidden; gap: 3px;
+  }}
+  .sbb-seg {{
+    height: 100%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0 8px; overflow: hidden;
+  }}
+  .sbb-inner-label {{
+    font-size: 14px; font-weight: 700; color: #fff;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }}
+
+  /* ── MoM slide ──────────────────────────────────────────────────────────── */
+  .mom-main {{ display: flex; flex-direction: column; justify-content: center; padding-top: 4px; }}
+  .mom-split {{ display: grid; grid-template-columns: 58fr 38fr; gap: 28px; align-items: stretch; }}
+  .mom-left {{ display: flex; flex-direction: column; }}
+  .mom-left .table-wrap {{ border-radius: 14px; flex: 1; }}
+  .mom-right {{ display: flex; flex-direction: column; gap: 14px; }}
+  .sparkline-wrap {{
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 14px; padding: 16px 18px; flex: 1;
+    display: flex; flex-direction: column; min-height: 120px;
+  }}
+  .sparkline-wrap svg {{ flex: 1; min-height: 0; }}
+
+  /* ── Combined Channel Performance slide ────────────────────────────────── */
+  .ch-perf-main {{
+    display: flex; flex-direction: column; gap: 10px; padding-top: 2px;
+  }}
+  /* 4-cell grid: 2 rows × 2 cols (left 2/3 table sections, right 1/3 insights)
+     align-items:start lets each row shrink to its content height               */
+  .ch-perf-body {{
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    grid-template-rows: auto auto;
+    gap: 14px 20px;
+    align-items: start;
+    flex: 1; min-height: 0;
+  }}
+  .ch-perf-section {{
+    display: flex; flex-direction: column; gap: 8px;
+  }}
+  .ch-perf-col-label {{
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.13em; color: #9BA3AF; flex-shrink: 0;
+    padding-bottom: 8px; border-bottom: 2px solid rgba(255,255,255,0.08);
+  }}
+  /* right-column insight cells — offset to align with the table, not the label */
+  .ch-perf-insight-cell {{
+    display: flex; flex-direction: column; gap: 10px;
+    padding-top: 28px;
+  }}
+  .ch-perf-insight-cell .insight-v2 {{ margin-top: 0; }}
+  /* grey info boxes inside sections */
+  .ch-perf-section .context-box {{ margin-top: 0; }}
+  .ch-perf-bench {{ flex-shrink: 0; }}
+
+  /* ── IndexBar ───────────────────────────────────────────────────────────── */
+  .ibar-cell {{ display: flex; align-items: center; gap: 10px; min-width: 130px; }}
+  .ibar-val {{ font-weight: 700; font-size: 14px; min-width: 52px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }}
+  .ibar-track {{
+    flex: 1; height: 8px; background: #1f2937;
+    border-radius: 9999px; position: relative; min-width: 60px;
+  }}
+  .ibar-fill {{ height: 100%; border-radius: 9999px; }}
+
+  /* ── InsightBox v2 ──────────────────────────────────────────────────────── */
+  .insight-v2 {{
+    position: relative; padding: 16px 20px 16px 26px;
+    border-radius: 12px; border: 1px solid; margin-top: 14px; overflow: hidden;
+  }}
+  .iv2-bar {{
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 6px; border-radius: 12px 0 0 12px;
+  }}
+  .iv2-inner {{ padding-left: 0; }}
+  .iv2-header {{ display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }}
+  .iv2-icon {{ display: flex; flex-shrink: 0; }}
+  .iv2-title {{
+    font-size: 14px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; line-height: 1;
+  }}
+  .iv2-body {{ font-size: 14px; color: #D1D5DB; line-height: 1.65; }}
+  .iv2-body strong {{ color: #fff; }}
+
+  /* ── Table: name cells with dot indicators ──────────────────────────────── */
+  .name-cell {{ display: flex; align-items: center; gap: 8px; }}
+  .name-text {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }}
+  .type-dot {{ width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }}
+  .site-dot {{ width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #6B7280; }}
+
+  /* ── Table: IndexBar column sub-label in header ─────────────────────────── */
+  .th-sub {{
+    font-size: 12px; color: #6B7280; text-transform: none; letter-spacing: normal;
+    font-weight: 500; margin-top: 4px; display: flex; align-items: center;
+    justify-content: flex-end; gap: 5px;
+  }}
+  .th-avg-tick {{
+    display: inline-block; width: 2px; height: 10px;
+    background: #fff; border-radius: 1px; flex-shrink: 0;
+  }}
+
+  /* ── Ad Group Performance slide ─────────────────────────────────────────── */
+  /* agp-main overrides slide-main so the grid fills exactly the available
+     height — no scrollbar, everything visible within the 810px deck. */
+  .agp-main {{
+    flex: 1; min-height: 0; overflow: hidden;
+    display: flex; flex-direction: column; padding-bottom: 0;
+  }}
+  .agp-grid {{
+    flex: 1; min-height: 0;
+    display: grid; gap: 14px;
+  }}
+  .agp-grid[data-count="1"] {{ grid-template-columns: 1fr; grid-template-rows: 1fr; max-width: 560px; margin: 0 auto; }}
+  .agp-grid[data-count="2"] {{ grid-template-columns: repeat(2, 1fr); grid-template-rows: 1fr; }}
+  .agp-grid[data-count="3"] {{ grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr; }}
+  .agp-grid[data-count="4"] {{ grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, auto); }}
+  /* 4 channel cards (top row) + remarketing hub centred under middle two */
+  .agp-grid[data-count="5"] {{ grid-template-columns: repeat(4, 1fr); grid-template-rows: auto auto; }}
+  .agp-grid[data-count="5"] .agp-card-rm {{ grid-column: 2 / 4; }}
+  /* Multi-row grids must not grow to fill parent — leaves room for the colour key */
+  .agp-grid[data-count="4"], .agp-grid[data-count="5"] {{ flex: 0 1 auto; }}
+  .agp-card {{
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; overflow: hidden;
+    display: flex; flex-direction: column; min-height: 0;
+  }}
+  .agp-card-header {{
+    padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.07);
+    display: flex; align-items: flex-start; justify-content: space-between;
+    flex-shrink: 0;
+  }}
+  .agp-chan-name {{
+    font-size: 14px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.12em; color: #fff; line-height: 1.3;
+  }}
+  .agp-metric-info {{ text-align: right; }}
+  .agp-metric-name {{
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; color: #9BA3AF; display: block;
+  }}
+  .agp-avg-chip {{
+    font-size: 13px; color: #9BA3AF; margin-top: 3px;
+    display: flex; align-items: center; justify-content: flex-end; gap: 5px;
+  }}
+  .agp-avg-tick {{
+    display: inline-block; width: 2px; height: 10px;
+    background: #fff; border-radius: 1px; flex-shrink: 0;
+  }}
+  /* rows section stretches to fill remaining card height, rows share space evenly */
+  .agp-rows {{
+    flex: 1; min-height: 0; overflow: hidden;
+    display: flex; flex-direction: column;
+  }}
+  .agp-row {{
+    flex: 1; min-height: 55px;
+    display: flex; align-items: center; gap: 18px;
+    padding: 0 20px; border-bottom: 1px solid rgba(255,255,255,0.05);
+  }}
+  .agp-row:last-child {{ border-bottom: none; }}
+  .agp-row-left {{ width: 88px; flex-shrink: 0; }}
+  .agp-ag-name {{
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.07em; color: #6B7280; display: block; margin-bottom: 3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }}
+  .agp-val {{
+    font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums;
+    display: block; line-height: 1;
+  }}
+  .agp-track {{
+    flex: 1; height: 12px; background: #1f2937;
+    border-radius: 6px; position: relative; min-width: 80px;
+  }}
+  .agp-fill {{ height: 100%; border-radius: 6px; }}
+  .agp-avg-line {{
+    position: absolute; left: 50%; top: -5px;
+    height: 22px; width: 2px; background: #fff;
+    border-radius: 1px; transform: translateX(-50%);
+    box-shadow: 0 0 4px rgba(0,0,0,0.6);
+  }}
+  .agp-card-footer {{
+    flex-shrink: 0;
+    padding: 7px 20px 8px;
+    font-size: 13px; color: #D1D5DB; line-height: 1.35;
+    border-top: 1px solid rgba(251,191,36,0.25);
+    background: rgba(251,191,36,0.07);
+    display: flex; align-items: flex-start; gap: 8px;
+  }}
+  .agp-footer-text {{
+    flex: 1; min-width: 0;
+    overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }}
+  .agp-card-footer strong {{ color: #fff; font-weight: 700; }}
+  .agp-footer-icon {{ color: #FBBF24; flex-shrink: 0; display: flex; padding-top: 1px; }}
+  .tbl-optim-note {{
+    margin-top: 12px;
+    padding: 8px 18px;
+    font-size: 13px; color: #D1D5DB; line-height: 1.35;
+    border: 1px solid rgba(251,191,36,0.25);
+    border-left: 3px solid #FBBF24;
+    background: rgba(251,191,36,0.07);
+    border-radius: 0 8px 8px 0;
+    display: flex; align-items: flex-start; gap: 8px;
+  }}
+  .tbl-optim-text {{
+    flex: 1; min-width: 0;
+    overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }}
+  .tbl-optim-note strong {{ color: #fff; font-weight: 700; }}
+
+  /* ── AGP metric key bar ────────────────────────────────────────────────── */
+  .agp-key {{
+    flex-shrink: 0; padding: 8px 0 2px;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0;
+    font-size: 12px; color: #4B5563;
+  }}
+  .agp-key-item {{ display: flex; align-items: center; gap: 5px; }}
+  .agp-key-item strong {{ color: #6B7280; font-weight: 700; }}
+  .agp-key-note {{ color: #374151; }}
+  .agp-key-sep {{ margin: 0 14px; color: #374151; }}
+  .agp-key-dot {{
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    opacity: 0.7;
+  }}
+
+  /* ── Remarketing Hub card ──────────────────────────────────────────────── */
+  .agp-card-rm {{
+    background: rgba(96,165,250,0.06);
+    border-color: rgba(96,165,250,0.30);
+  }}
+  /* Hub rows: no bar tracks — just left label + right value/badge */
+  .agp-rm-rows {{ justify-content: center; }}
+  .agp-rm-row {{
+    height: 58px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px; border-bottom: 1px solid rgba(255,255,255,0.05);
+  }}
+  .agp-rm-row:last-child {{ border-bottom: none; }}
+  .agp-rm-left {{ display: flex; flex-direction: column; gap: 3px; }}
+  .agp-rm-chan {{
+    font-size: 14px; font-weight: 700; color: #fff; line-height: 1;
+  }}
+  .agp-rm-lbl {{
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.09em; color: #6B7280;
+  }}
+  .agp-rm-right {{
+    display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+  }}
+  .agp-rm-val {{
+    font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }}
+  .agp-rm-vs {{
+    font-size: 12px; font-weight: 600; letter-spacing: 0.03em; line-height: 1;
+  }}
+
+  /* ── Upsell ─────────────────────────────────────────────────────────────── */
+  .upsell-wrap {{ position: relative; margin-top: 16px; }}
+  .upsell-logo {{
+    position: absolute; top: 18px; right: 18px; height: 20px; width: auto;
+    filter: brightness(0) invert(1); opacity: 0.7; z-index: 1;
+  }}
+  .upsell-wrap .insight-v2 {{ margin-top: 0; padding-right: 60px; }}
+
+  /* ── Tables ─────────────────────────────────────────────────────────────── */
+  .table-wrap {{
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px; overflow: hidden; overflow-x: auto;
+  }}
   table {{ width: 100%; border-collapse: collapse; font-size: 15px; min-width: 600px; }}
-  thead tr {{ background: #671E75; }}
+  thead tr {{ background: rgba(255,255,255,0.06); }}
   th {{
-    color: #fff; padding: 15px 18px; font-weight: 600; font-size: 12px;
-    text-transform: uppercase; letter-spacing: 0.07em; min-width: 80px;
+    color: #9BA3AF; padding: 12px 16px; font-weight: 600; font-size: 13px;
+    text-transform: uppercase; letter-spacing: 0.08em; min-width: 80px;
     vertical-align: bottom; line-height: 1.3; text-align: right;
   }}
   th:first-child {{ min-width: 160px; text-align: left; }}
   td {{
-    padding: var(--td-pad, 15px) 18px; border-bottom: 1px solid rgba(255,255,255,0.05);
+    padding: var(--td-pad, 13px) 16px; border-bottom: 1px solid rgba(255,255,255,0.05);
     color: #fff; vertical-align: middle; text-align: left;
   }}
   td:first-child {{ word-break: break-word; overflow-wrap: anywhere; max-width: 240px; line-height: 1.4; }}
   td.right {{ text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }}
   tr:last-child td {{ border-bottom: none; }}
-  tbody tr:nth-child(even) td {{ background: rgba(255,255,255,0.025); }}
-  tbody tr:hover td {{ background: rgba(91,194,231,0.07); }}
+  tbody tr:hover td {{ background: rgba(255,255,255,0.04); }}
 
-  /* Components */
-  .na {{ color: #4B5563; font-size: 11px; }}
-  .insight-box {{
-    background: rgba(91,194,231,0.08);
-    border: 1px solid rgba(91,194,231,0.2);
-    border-left: 5px solid #5BC2E7;
-    border-radius: 0 10px 10px 0; padding: 18px 24px;
-    margin-top: 16px; font-size: 15px; color: #fff; line-height: 1.65;
-  }}
-  .insight-box strong {{ color: #fff; }}
+  /* ── Other components ───────────────────────────────────────────────────── */
+  .na {{ color: #4B5563; font-size: 13px; }}
   .context-box {{
-    background: rgba(255,255,255,0.04);
+    background: rgba(255,255,255,0.03);
     border: 1px solid rgba(255,255,255,0.07);
-    border-radius: 8px; padding: 14px 20px;
-    margin-top: 16px; font-size: 13px; color: #9BA3AF; line-height: 1.6;
+    border-radius: 10px; padding: 12px 18px;
+    margin-top: 14px; font-size: 14px; color: #9BA3AF; line-height: 1.6;
   }}
   .context-box strong {{ color: #C4B5D4; }}
   .bench-note {{
-    display: inline-block; margin-top: 12px; padding: 8px 14px;
-    background: rgba(255,255,255,0.04); border-left: 3px solid #5BC2E7;
-    border-radius: 0 6px 6px 0; font-size: 12px; color: #9BA3AF;
+    display: inline-block; margin-top: 10px; padding: 7px 12px;
+    background: rgba(255,255,255,0.03); border-left: 3px solid #5BC2E7;
+    border-radius: 0 6px 6px 0; font-size: 13px; color: #9BA3AF;
   }}
   .bench-note strong {{ color: #fff; font-weight: 600; }}
-  .upsell-block {{
-    position: relative; background: #EF426F; border-radius: 12px;
-    padding: 26px 30px; margin-top: 20px; color: #fff;
-  }}
-  .upsell-headline {{ font-size: 16px; font-weight: 700; margin-bottom: 10px; padding-right: 80px; }}
-  .upsell-body {{ font-size: 13px; line-height: 1.7; max-width: 88%; margin: 0; }}
-  .upsell-logo {{
-    position: absolute; top: 26px; right: 26px; height: 22px; width: auto;
-    filter: brightness(0) invert(1); opacity: 0.85;
-  }}
-  .glossary-grid {{ display: grid; grid-template-columns: repeat(2,1fr); gap: 10px 36px; margin-bottom: 16px; }}
+  .glossary-grid {{ display: grid; grid-template-columns: repeat(2,1fr); gap: 8px 28px; margin-bottom: 14px; }}
   .glossary-item {{
-    font-size: 12px; color: #9BA3AF; line-height: 1.5; padding: 8px 12px;
-    background: #252526; border-left: 2px solid #671E75; border-radius: 0 4px 4px 0;
+    font-size: 14px; color: #9BA3AF; line-height: 1.5; padding: 8px 12px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-left: 3px solid rgba(103,30,117,0.8); border-radius: 0 8px 8px 0;
   }}
   .glossary-term {{ font-weight: 700; color: #C4B5D4; }}
   .glossary-attribution {{
-    font-size: 12px; color: #9BA3AF; padding: 10px 14px;
-    background: #252526; border-radius: 6px; line-height: 1.6;
+    font-size: 14px; color: #9BA3AF; padding: 10px 14px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; line-height: 1.6;
   }}
 
-  /* Navigation */
+  /* ── Navigation ─────────────────────────────────────────────────────────── */
   .nav-arrow {{
     position: absolute; top: 50%; transform: translateY(-50%); z-index: 200;
     background: rgba(37,37,38,0.88); border: 1px solid rgba(255,255,255,0.1);
@@ -909,7 +1809,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
   .dot:hover:not(.dot-active) {{ background: rgba(255,255,255,0.42); }}
   .slide-counter {{
     position: absolute; bottom: 15px; right: 22px; z-index: 201;
-    font-size: 11px; color: #374151; font-variant-numeric: tabular-nums;
+    font-size: 13px; color: #374151; font-variant-numeric: tabular-nums;
     letter-spacing: 0.05em; pointer-events: none;
   }}
 </style>
@@ -1044,13 +1944,25 @@ def process_csv(csv_bytes, csv_filename, config_df, prev_data=None, client_histo
         rev=('_rev', 'sum')
     ).reset_index().sort_values('st', ascending=False).head(10)
 
+    grp_adgroup = None
+    if 'Ad Group' in df.columns:
+        df['_ag_label'] = df['Ad Group'].apply(extract_adgroup_label)
+        grp_adgroup = df.groupby(['_chan', '_ag_label']).agg(
+            imp=('Impressions',                       'sum'),
+            spnd=('Advertiser Cost (Adv Currency)',   'sum'),
+            conv=('_conv',                            'sum'),
+            st=('_st',                                'sum'),
+            pcv=('Player Completed Views',            'sum'),
+        ).reset_index()
+
     upsell_data = _calc_upsell(client_history, extract_report_month(csv_filename),
                                float(spnd), float(conv))
 
     html_str = generate_html(
         csv_filename, client_name, conv_label, has_revenue,
         (imp, clk, spnd, conv, st, pcv, rev, uh),
-        grp_chan, grp_cre, grp_site, prev_data, upsell_data, client_history
+        grp_chan, grp_cre, grp_site, prev_data, upsell_data, client_history,
+        grp_adgroup=grp_adgroup,
     )
 
     totals_dict = {
@@ -1091,12 +2003,117 @@ def main(csv_path):
     print(f"HTML saved  : {html_path}")
 
 
+def _run_tests():
+    """Generate two test reports to ~/Desktop/Reporting/:
+    - high_conv_test_report.html  → uses real CSV, CPA should appear everywhere
+    - low_conv_test_report.html   → same CSV but conversions zeroed to 5 total,
+                                    Cost Per Visit should appear instead of CPA
+    """
+    import io as _io
+
+    CONFIG_PATH = '/Users/samhurdley/Desktop/Reporting/client_config.xlsx'
+    CSV_PATH    = ('/Users/samhurdley/Desktop/Reporting/'
+                   'Meatbox _ LastMonth _ Sam - Omnichannel CSV Report'
+                   '_2026-03-01_2026-04-01_190090886.csv')
+    OUT_DIR     = '/Users/samhurdley/Desktop/Reporting'
+
+    config_df = pd.read_excel(CONFIG_PATH, sheet_name='Config')
+
+    # ── Test 1: High-conv (real data, CPA) ────────────────────────────────────
+    print('Running HIGH-CONV test…')
+    with open(CSV_PATH, 'rb') as f:
+        csv_bytes_real = f.read()
+
+    # Dummy history for high-conv: historical CPAs higher than current so upsell fires.
+    # Real data: ~1617 conv, $7500 spend → CPA ≈ $4.64
+    # History CPAs: $6.36 + $6.19 → avg ≈ $6.28 → improvement ≈ 26% (≥15% threshold)
+    high_history = pd.DataFrame([
+        {'Client': 'Meatbox', 'Month': 'January 2026',  'Impressions': 4_800_000, 'Clicks': 9_200,
+         'Spend': 7_000, 'Conversions': 1_100, 'Revenue': 0, 'Site Traffic': 29_000, 'Upsell_Triggered': 'FALSE'},
+        {'Client': 'Meatbox', 'Month': 'February 2026', 'Impressions': 5_300_000, 'Clicks': 10_100,
+         'Spend': 6_500, 'Conversions': 1_050, 'Revenue': 0, 'Site Traffic': 32_000, 'Upsell_Triggered': 'FALSE'},
+    ])
+    prev_data_high = {
+        'Impressions': 5_300_000, 'Clicks': 10_100,
+        'Spend': 6_500, 'Conversions': 1_050, 'Revenue': 0, 'Site Traffic': 32_000,
+    }
+    client_name, html_high, _ = process_csv(
+        csv_bytes_real, os.path.basename(CSV_PATH), config_df,
+        prev_data=prev_data_high, client_history=high_history,
+    )
+    out_high = os.path.join(OUT_DIR, 'high_conv_test_report.html')
+    with open(out_high, 'w', encoding='utf-8') as f:
+        f.write(html_high)
+    assert 'Cost Per Visit' not in html_high.split('<div class="mc-label">')[1].split('</div>')[0], \
+        'HIGH-CONV: overview card should say CPA, not Cost Per Visit'
+    assert '>CPA<' in html_high, 'HIGH-CONV: MoM table should have CPA header'
+    assert 'Site Traffic — Monthly Trend' not in html_high, \
+        'HIGH-CONV: sparkline must not switch to Site Traffic when conversions are high'
+    assert 'Optimisation Opportunity' in html_high, 'HIGH-CONV: upsell block should appear'
+    print(f'  ✓ Saved: {out_high}')
+
+    # ── Test 2: Low-conv (5 conversions on Display rows, CPV) ─────────────────
+    print('Running LOW-CONV test…')
+    raw_df    = pd.read_csv(_io.BytesIO(csv_bytes_real))
+    config_r  = find_client_config(os.path.basename(CSV_PATH), config_df)
+    conv_cols = find_conv_cols(raw_df.columns.tolist(), config_r)
+    if conv_cols:
+        for col in conv_cols:
+            raw_df[col] = pd.to_numeric(raw_df[col], errors='coerce').fillna(0)
+            raw_df[col] = 0.0
+        display_mask = raw_df['Campaign'].str.contains('Display', case=False, na=False)
+        display_idx  = raw_df[display_mask].index[:5]
+        target_idx   = display_idx if len(display_idx) else raw_df.index[:5]
+        raw_df.loc[target_idx, conv_cols[0]] = 1.0
+
+    modified_csv = raw_df.to_csv(index=False).encode('utf-8')
+
+    # Dummy history for low-conv: historical CPAs higher than current so upsell fires.
+    # Current: 5 conv, $7500 spend → CPA = $1500
+    # History: $2000 + $1700 → avg $1850 → improvement ≈ 19% (≥15% threshold)
+    low_history = pd.DataFrame([
+        {'Client': 'Meatbox', 'Month': 'January 2026',  'Impressions': 4_200_000, 'Clicks': 8_100,
+         'Spend': 6_000, 'Conversions': 3, 'Revenue': 0, 'Site Traffic': 28_000, 'Upsell_Triggered': 'FALSE'},
+        {'Client': 'Meatbox', 'Month': 'February 2026', 'Impressions': 5_100_000, 'Clicks': 9_400,
+         'Spend': 6_800, 'Conversions': 4, 'Revenue': 0, 'Site Traffic': 31_500, 'Upsell_Triggered': 'FALSE'},
+    ])
+    prev_data_low = {
+        'Impressions': 5_100_000, 'Clicks': 9_400,
+        'Spend': 6_800, 'Conversions': 4, 'Revenue': 0, 'Site Traffic': 31_500,
+    }
+    client_name2, html_low, _ = process_csv(
+        modified_csv, os.path.basename(CSV_PATH), config_df,
+        prev_data=prev_data_low, client_history=low_history,
+    )
+    out_low = os.path.join(OUT_DIR, 'low_conv_test_report.html')
+    with open(out_low, 'w', encoding='utf-8') as f:
+        f.write(html_low)
+    assert 'Cost Per Visit' in html_low, 'LOW-CONV: overview card should show Cost Per Visit'
+    assert '>Cost Per Visit<' in html_low, 'LOW-CONV: MoM table header should say Cost Per Visit'
+    # Sparkline only renders with ≥2 history months; confirm CPA sparkline is NOT active
+    assert 'Conversions — Monthly Trend' not in html_low, \
+        'LOW-CONV: sparkline must not say Conversions when in low-conv mode'
+    print(f'  ✓ Saved: {out_low}')
+
+    print('\nAll tests passed ✓')
+    print(f'Open the files in {OUT_DIR} to review.')
+
+
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
+    if len(sys.argv) == 2 and sys.argv[1] == '--test':
+        try:
+            _run_tests()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+    elif len(sys.argv) != 2:
         print("Usage:  python process_report.py path/to/report.csv")
+        print("        python process_report.py --test   (run high/low-conv tests)")
         sys.exit(1)
-    try:
-        main(sys.argv[1])
-    except Exception as e:
-        print(f"\nError: {e}")
-        sys.exit(1)
+    else:
+        try:
+            main(sys.argv[1])
+        except Exception as e:
+            print(f"\nError: {e}")
+            sys.exit(1)
