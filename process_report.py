@@ -1893,6 +1893,7 @@ def html_to_pdf(html_str: str) -> bytes:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={'width': 1440, 'height': 810})
         page.set_content(html_str, wait_until='networkidle')
+        page.evaluate("() => document.fonts.ready")
         pdf_bytes = page.pdf(
             print_background=True,
             margin={'top': '0', 'right': '0', 'bottom': '0', 'left': '0'},
