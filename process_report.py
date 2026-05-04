@@ -1332,9 +1332,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_h(client_name)} \u2014 {_h(report_month)}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@300;400;600;700&display=swap" rel="stylesheet">
+{_barlow_font_css()}
 <style>
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
   html, body {{
@@ -1885,6 +1883,21 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
 </script>
 </body>
 </html>'''
+
+
+def _barlow_font_css() -> str:
+    import base64, pathlib
+    fonts_dir = pathlib.Path(__file__).parent / 'fonts'
+    rules = []
+    for weight in (300, 400, 600, 700):
+        path = fonts_dir / f'barlow_{weight}.woff2'
+        b64 = base64.b64encode(path.read_bytes()).decode()
+        rules.append(
+            f"@font-face{{font-family:'Barlow Semi Condensed';font-style:normal;"
+            f"font-weight:{weight};font-display:swap;"
+            f"src:url('data:font/woff2;base64,{b64}') format('woff2');}}"
+        )
+    return '<style>' + ''.join(rules) + '</style>'
 
 
 def html_to_pdf(html_str: str) -> bytes:
