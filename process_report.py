@@ -1902,18 +1902,31 @@ def _barlow_font_css() -> str:
 
 def html_to_pdf(html_str: str) -> bytes:
     from playwright.sync_api import sync_playwright
+    from PIL import Image
+    import io
+
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={'width': 1440, 'height': 810})
         page.set_content(html_str, wait_until='networkidle')
         page.evaluate("() => document.fonts.ready")
-        pdf_bytes = page.pdf(
-            print_background=True,
-            margin={'top': '0', 'right': '0', 'bottom': '0', 'left': '0'},
-            prefer_css_page_size=True,
-        )
+
+        n = page.evaluate("() => document.querySelectorAll('.slide').length")
+
+        screenshots = []
+        for i in range(n):
+            page.evaluate(f"""() => {{
+                document.querySelectorAll('.slide').forEach(function(s, j) {{
+                    s.style.display = j === {i} ? 'flex' : 'none';
+                }});
+            }}""")
+            screenshots.append(Image.open(io.BytesIO(page.screenshot(type='png'))))
+
         browser.close()
-    return pdf_bytes
+
+    buf = io.BytesIO()
+    screenshots[0].save(buf, format='PDF', save_all=True, append_images=screenshots[1:])
+    return buf.getvalue()
 
 
 # ── Core processor ────────────────────────────────────────────────────────────
