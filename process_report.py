@@ -1906,7 +1906,7 @@ def html_to_pdf(html_str: str) -> bytes:
     import io
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(args=['--no-sandbox', '--disable-dev-shm-usage'])
         page = browser.new_page(viewport={'width': 1440, 'height': 810})
         page.set_content(html_str, wait_until='networkidle')
         page.evaluate("() => document.fonts.ready")
@@ -1920,7 +1920,8 @@ def html_to_pdf(html_str: str) -> bytes:
                     s.style.display = j === {i} ? 'flex' : 'none';
                 }});
             }}""")
-            screenshots.append(Image.open(io.BytesIO(page.screenshot(type='png'))))
+            img = Image.open(io.BytesIO(page.screenshot(type='png'))).convert('RGB')
+            screenshots.append(img)
 
         browser.close()
 
