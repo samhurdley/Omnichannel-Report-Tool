@@ -7,6 +7,13 @@ import gspread
 from google.oauth2.service_account import Credentials
 from process_report import process_csv, extract_report_month, find_client_config, html_to_pdf
 
+@st.cache_resource
+def _install_playwright_browsers():
+    import subprocess, sys
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+
+_install_playwright_browsers()
+
 st.set_page_config(
     page_title="Report Processor",
     page_icon="📊",
