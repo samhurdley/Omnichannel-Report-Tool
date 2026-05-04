@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-from process_report import process_csv, extract_report_month, find_client_config
+from process_report import process_csv, extract_report_month, find_client_config, html_to_pdf
 
 st.set_page_config(
     page_title="Report Processor",
@@ -160,6 +160,12 @@ csv_files = st.file_uploader(
 if config_df is not None and csv_files:
     st.markdown(f"**{len(csv_files)} file(s) ready.**")
 
+    output_format = st.radio(
+        "Output format",
+        ["HTML", "PDF", "HTML + PDF"],
+        horizontal=True,
+    )
+
     if st.button("Process all reports", type="primary", use_container_width=True):
         ws = _get_gsheet()
         history_df = _load_history(ws)
@@ -191,7 +197,14 @@ if config_df is not None and csv_files:
                     client_name, html_str, totals = process_csv(
                         csv_bytes, csv_file.name, config_df, prev_data, client_history
                     )
-                    zf.writestr(f"{client_name}_report.html", html_str.encode("utf-8"))
+                    if output_format in ("HTML", "HTML + PDF"):
+                        zf.writestr(f"{client_name}_report.html", html_str.encode("utf-8"))
+                    if output_format in ("PDF", "HTML + PDF"):
+                        progress_bar.progress(
+                            (i + 1) / len(csv_files),
+                            text=f"Generating PDF for {client_name}…",
+                        )
+                        zf.writestr(f"{client_name}_report.pdf", html_to_pdf(html_str))
                     results.append(client_name)
 
                     history_df = _upsert_history(history_df, totals)

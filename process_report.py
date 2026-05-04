@@ -846,7 +846,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                     f'<div class="th-sub"><span class="th-avg-tick"></span> Avg {vr_avg_label}</div>'
                     if vr_avg_label else 'Visit Rate')
     cre_head = (
-        f'<tr>{_h_th("Creative")}{_h_th("Impressions",right=True)}'
+        f'<tr>{_h_th("Creative")}'
         f'{_h_th("CTR",right=True)}{_h_th("eCPC",right=True)}'
         f'{_h_th("Completion Rate",right=True)}{_h_th("Attributed Site Traffic",right=True)}'
         f'{_h_th(vr_th_label,right=True,raw=True)}</tr>'
@@ -861,7 +861,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                     f'{_creative_type_dot(r["Creative"])}'
                     f'<span class="name-text">{_h(str(r["Creative"]))}</span>'
                     f'</span>')
-        cre_body += _td_row([cre_name, _n(r.imp), _p(ctr_), _m(cpc_), comp_v, _n(r.st), vr_bar])
+        cre_body += _td_row([cre_name, _p(ctr_), _m(cpc_), comp_v, _n(r.st), vr_bar])
 
     creative_insight_html = ''
     if not top10_cre.empty and imp > 0 and st > 0:
@@ -890,7 +890,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                     f'<div class="th-sub"><span class="th-avg-tick"></span> Blended Avg {vr_avg_label}</div>'
                     if vr_avg_label else 'Visit Rate')
     site_head = (
-        f'<tr>{_h_th("Publisher Site")}{_h_th("Impressions",right=True)}'
+        f'<tr>{_h_th("Publisher Site")}'
         f'{_h_th("CPM",right=True)}{_h_th("Attributed Site Traffic",right=True)}'
         f'{_h_th(vr_th_label,right=True,raw=True)}</tr>'
     )
@@ -902,7 +902,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                      f'<span class="site-dot"></span>'
                      f'<span class="name-text">{_h(str(r["Site"]))}</span>'
                      f'</span>')
-        site_body += _td_row([site_name, _n(r.imp), _m(cpm_), _n(r.st), vr_bar])
+        site_body += _td_row([site_name, _m(cpm_), _n(r.st), vr_bar])
 
     site_insight_html = ''
     if not grp_site.empty and imp > 0 and st > 0:
@@ -1812,6 +1812,23 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     font-size: 13px; color: #374151; font-variant-numeric: tabular-nums;
     letter-spacing: 0.05em; pointer-events: none;
   }}
+
+  @media print {{
+    @page {{ size: 15in 8.4375in; margin: 0; }}
+    html, body {{ height: auto; overflow: visible; background: #111;
+      margin: 0; padding: 0;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+    .deck {{ position: static; width: 1440px; height: auto;
+      transform: none !important; left: 0 !important; top: 0 !important; }}
+    .slide {{ position: static; display: flex !important; flex-direction: column;
+      width: 1440px; height: 810px; overflow: hidden;
+      page-break-after: always; break-after: page; }}
+    .slide-cover {{ justify-content: center; }}
+    .cover-inner {{ flex: 1; min-height: 0; }}
+    .slide-main {{ overflow: hidden; flex: 1; min-height: 0; }}
+    .slide-main:not(.table-main) {{ display: flex; flex-direction: column; justify-content: center; }}
+    .nav-arrow, .nav-bar, .slide-counter {{ display: none !important; }}
+  }}
 </style>
 </head>
 <body>
@@ -1868,6 +1885,21 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
 </script>
 </body>
 </html>'''
+
+
+def html_to_pdf(html_str: str) -> bytes:
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={'width': 1440, 'height': 810})
+        page.set_content(html_str, wait_until='networkidle')
+        pdf_bytes = page.pdf(
+            print_background=True,
+            margin={'top': '0', 'right': '0', 'bottom': '0', 'left': '0'},
+            prefer_css_page_size=True,
+        )
+        browser.close()
+    return pdf_bytes
 
 
 # ── Core processor ────────────────────────────────────────────────────────────
@@ -1988,7 +2020,7 @@ def main(csv_path):
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"client_config.xlsx not found.\nExpected: {config_path}")
 
-    config_df = pd.read_excel(config_path)
+    config_df = pd.read_excel(config_path, sheet_name='Config')
     with open(csv_path, 'rb') as f:
         csv_bytes = f.read()
 
