@@ -1846,6 +1846,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
       min-height: 0 !important;
     }}
     .agp-rows {{
+      flex: 0 0 auto !important;
       overflow: visible !important;
     }}
     /* Single-row card layouts (1-3 cards): compact rows ~ HTML appearance */
