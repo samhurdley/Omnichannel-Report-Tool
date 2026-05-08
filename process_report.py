@@ -1842,6 +1842,8 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     }}
     .agp-grid {{
       flex: 0 0 auto !important;
+      width: 100% !important;
+      align-self: stretch !important;
       overflow: visible !important;
       min-height: 0 !important;
     }}
