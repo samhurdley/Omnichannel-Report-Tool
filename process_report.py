@@ -34,7 +34,8 @@ def find_col_by_key(csv_columns, config_row, key):
 def find_conv_cols(csv_columns, config_row):
     cols = []
     for key in ['Conversion Column 1', 'Conversion Column 2',
-                'Conversion Column 3', 'Conversion Column 4']:
+                'Conversion Column 3', 'Conversion Column 4',
+                'Conversion Column 5']:
         col = find_col_by_key(csv_columns, config_row, key)
         if col and col not in cols:
             cols.append(col)
@@ -836,10 +837,11 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
 
     # ── Top 10 Creatives table ────────────────────────────────────────────────
     top10_cre  = grp_cre.nlargest(10, 'st')
-    cre_vrs    = [r['st'] / r['imp'] if r['imp'] > 0 else 0
+    cre_vrs    = [r['st'] / r['imp'] if r['imp'] > 0 and r['st'] <= r['imp'] else None
                   for _, r in top10_cre.iterrows()]
-    avg_cre_vr = sum(cre_vrs) / len(cre_vrs) if cre_vrs else 0
-    max_cre_vr = max(cre_vrs) if cre_vrs else 0
+    _cre_vrs_valid = [v for v in cre_vrs if v is not None]
+    avg_cre_vr = sum(_cre_vrs_valid) / len(_cre_vrs_valid) if _cre_vrs_valid else 0
+    max_cre_vr = max(_cre_vrs_valid) if _cre_vrs_valid else 0
     # Header for Visit Rate column includes avg sub-label with white marker tick
     vr_avg_label = (_p(avg_cre_vr * 100) if avg_cre_vr > 0 else '')
     vr_th_label  = (f'Visit Rate'
@@ -856,7 +858,10 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         ctr_, cpc_, cpm_, cvr_, comp_ = calc_metrics(r.imp, r.clk, r.spnd, r.conv, r.pcv)
         comp_v   = NA if comp_ == 0 else _p(comp_)
         vr       = cre_vrs[idx]
-        vr_bar   = _index_bar_html(_p(vr * 100), vr * 100, avg_cre_vr * 100, max_cre_vr * 100)
+        if vr is None:
+            vr_bar = '<span class="na">No delivery this month</span>'
+        else:
+            vr_bar = _index_bar_html(_p(vr * 100), vr * 100, avg_cre_vr * 100, max_cre_vr * 100)
         cre_name = (f'<span class="name-cell">'
                     f'{_creative_type_dot(r["Creative"])}'
                     f'<span class="name-text">{_h(str(r["Creative"]))}</span>'
@@ -868,7 +873,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         campaign_vr = st / imp
         grp_cre_vr  = top10_cre.copy()
         grp_cre_vr['_vr'] = grp_cre_vr.apply(
-            lambda r: r['st'] / r['imp'] if r['imp'] > 0 else 0, axis=1)
+            lambda r: r['st'] / r['imp'] if r['imp'] > 0 and r['st'] <= r['imp'] else 0, axis=1)
         top_vr_row = grp_cre_vr.loc[grp_cre_vr['_vr'].idxmax()]
         if campaign_vr > 0:
             variance_pct = (top_vr_row['_vr'] - campaign_vr) / campaign_vr * 100
@@ -1565,25 +1570,24 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
   }}
 
   /* ── Ad Group Performance slide ─────────────────────────────────────────── */
-  /* agp-main overrides slide-main so the grid fills exactly the available
-     height — no scrollbar, everything visible within the 810px deck. */
+  /* agp-main uses a 2-row CSS grid so the colour key always gets its natural
+     height (auto) and the card grid fills the remaining 1fr — no clipping. */
   .agp-main {{
     flex: 1; min-height: 0; overflow: hidden;
-    display: flex; flex-direction: column; padding-bottom: 0;
+    display: grid; grid-template-rows: 1fr auto;
   }}
   .agp-grid {{
-    flex: 1; min-height: 0;
-    display: grid; gap: 14px;
+    display: grid; gap: 14px; min-height: 0; overflow: hidden; align-items: start;
   }}
-  .agp-grid[data-count="1"] {{ grid-template-columns: 1fr; grid-template-rows: 1fr; max-width: 560px; margin: 0 auto; }}
-  .agp-grid[data-count="2"] {{ grid-template-columns: repeat(2, 1fr); grid-template-rows: 1fr; }}
+  .agp-grid[data-count="1"] {{ grid-template-columns: 1fr; grid-template-rows: 1fr; max-width: 520px; margin: 0 auto; width: 100%; }}
+  /* count=2: cap width so cards aren't excessively wide */
+  .agp-grid[data-count="2"] {{ grid-template-columns: repeat(2, 1fr); grid-template-rows: 1fr; max-width: 960px; margin: 0 auto; width: 100%; }}
   .agp-grid[data-count="3"] {{ grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr; }}
-  .agp-grid[data-count="4"] {{ grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, auto); }}
+  /* Multi-row grids: align-self:start so they don't stretch to fill agp-main */
+  .agp-grid[data-count="4"] {{ grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, auto); align-self: start; }}
   /* 4 channel cards (top row) + remarketing hub centred under middle two */
-  .agp-grid[data-count="5"] {{ grid-template-columns: repeat(4, 1fr); grid-template-rows: auto auto; }}
+  .agp-grid[data-count="5"] {{ grid-template-columns: repeat(4, 1fr); grid-template-rows: auto auto; align-self: start; }}
   .agp-grid[data-count="5"] .agp-card-rm {{ grid-column: 2 / 4; }}
-  /* Multi-row grids must not grow to fill parent — leaves room for the colour key */
-  .agp-grid[data-count="4"], .agp-grid[data-count="5"] {{ flex: 0 1 auto; }}
   .agp-card {{
     background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
     border-radius: 16px; overflow: hidden;
@@ -1617,7 +1621,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     display: flex; flex-direction: column;
   }}
   .agp-row {{
-    flex: 1; min-height: 55px;
+    flex: 1; min-height: 55px; max-height: 80px;
     display: flex; align-items: center; gap: 18px;
     padding: 0 20px; border-bottom: 1px solid rgba(255,255,255,0.05);
   }}
@@ -1694,6 +1698,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
   .agp-card-rm {{
     background: rgba(96,165,250,0.06);
     border-color: rgba(96,165,250,0.30);
+    align-self: start; /* size to content; don't stretch when it has few rows */
   }}
   /* Hub rows: no bar tracks — just left label + right value/badge */
   .agp-rm-rows {{ justify-content: center; }}
@@ -1919,7 +1924,7 @@ def process_csv(csv_bytes, csv_filename, config_df, prev_data=None, client_histo
     if not conv_cols:
         raise ValueError(
             f"No conversion columns found for '{client_name}'. "
-            "Check Conversion Column 1–4 in client_config.xlsx."
+            "Check Conversion Column 1–5 in client_config.xlsx."
         )
 
     st_col      = find_col_by_key(df.columns, config_row, 'Site Traffic')
