@@ -1832,31 +1832,39 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     .slide-main:not(.table-main) {{ display: flex; flex-direction: column; justify-content: center; }}
     .nav-arrow, .nav-bar, .slide-counter {{ display: none !important; }}
 
-    /* AGP slide: WeasyPrint can't fully resolve nested CSS Grid 1fr rows.
-       Drop grid for flex and pin card heights as a safety net. */
+    /* AGP slide: WeasyPrint can't fully resolve nested CSS Grid 1fr rows
+       or flex-grow inside content-sized parents. Pin row heights so the
+       card body has real content height; let cards size to that content. */
     .agp-main {{
       display: flex !important;
       flex-direction: column !important;
       overflow: visible !important;
     }}
     .agp-grid {{
-      flex: 1 1 auto !important;
-      align-items: stretch !important;
+      flex: 0 0 auto !important;
       overflow: visible !important;
       min-height: 0 !important;
     }}
-    .agp-grid[data-count="4"],
-    .agp-grid[data-count="5"] {{
+    .agp-rows {{
+      overflow: visible !important;
+    }}
+    /* Single-row card layouts (1-3 cards): compact rows ~ HTML appearance */
+    .agp-grid[data-count="1"] .agp-row,
+    .agp-grid[data-count="2"] .agp-row,
+    .agp-grid[data-count="3"] .agp-row,
+    .agp-grid[data-count="1"] .agp-rm-row,
+    .agp-grid[data-count="2"] .agp-rm-row,
+    .agp-grid[data-count="3"] .agp-rm-row {{
       flex: 0 0 auto !important;
+      height: 100px !important;
     }}
-    .agp-grid[data-count="1"] .agp-card,
-    .agp-grid[data-count="2"] .agp-card,
-    .agp-grid[data-count="3"] .agp-card {{
-      min-height: 600px !important;
-    }}
-    .agp-grid[data-count="4"] .agp-card,
-    .agp-grid[data-count="5"] .agp-card {{
-      min-height: 290px !important;
+    /* Two-row card layouts (4, 5 cards): shorter rows so cards fit vertically */
+    .agp-grid[data-count="4"] .agp-row,
+    .agp-grid[data-count="5"] .agp-row,
+    .agp-grid[data-count="4"] .agp-rm-row,
+    .agp-grid[data-count="5"] .agp-rm-row {{
+      flex: 0 0 auto !important;
+      height: 65px !important;
     }}
   }}
 </style>
