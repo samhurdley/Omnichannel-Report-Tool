@@ -1831,6 +1831,33 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     .slide-main {{ overflow: hidden; flex: 1; min-height: 0; }}
     .slide-main:not(.table-main) {{ display: flex; flex-direction: column; justify-content: center; }}
     .nav-arrow, .nav-bar, .slide-counter {{ display: none !important; }}
+
+    /* AGP slide: WeasyPrint can't fully resolve nested CSS Grid 1fr rows.
+       Drop grid for flex and pin card heights as a safety net. */
+    .agp-main {{
+      display: flex !important;
+      flex-direction: column !important;
+      overflow: visible !important;
+    }}
+    .agp-grid {{
+      flex: 1 1 auto !important;
+      align-items: stretch !important;
+      overflow: visible !important;
+      min-height: 0 !important;
+    }}
+    .agp-grid[data-count="4"],
+    .agp-grid[data-count="5"] {{
+      flex: 0 0 auto !important;
+    }}
+    .agp-grid[data-count="1"] .agp-card,
+    .agp-grid[data-count="2"] .agp-card,
+    .agp-grid[data-count="3"] .agp-card {{
+      min-height: 600px !important;
+    }}
+    .agp-grid[data-count="4"] .agp-card,
+    .agp-grid[data-count="5"] .agp-card {{
+      min-height: 290px !important;
+    }}
   }}
 </style>
 </head>
