@@ -637,10 +637,12 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                     mom_insight_text = f'Since launch, your cost-per-conversion has improved by <strong>{improvement:.0f}%</strong>, reflecting an increasingly optimised path to conversion.'
 
         prev_spend = prev_cpa_hist = prev_st_hist = prev_conv_hist = prev_cpv_hist = None
+        prev_rev_hist = None
         for _, r in hist.iterrows():
-            s    = float(r.get('Spend', 0) or 0)
-            c    = float(r.get('Conversions', 0) or 0)
-            st_h = float(r.get('Site Traffic', 0) or 0)
+            s     = float(r.get('Spend', 0) or 0)
+            c     = float(r.get('Conversions', 0) or 0)
+            st_h  = float(r.get('Site Traffic', 0) or 0)
+            rev_h = float(r.get('Revenue', 0) or 0) if has_revenue else 0
             if low_conv:
                 cpv_h = s / st_h if st_h > 0 else None
                 last_col_str = (
@@ -655,14 +657,19 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                     if cpa_h is not None else NA_mom
                 )
                 prev_cpa_hist = cpa_h
-            history_rows_html += _td_row([
+            row_cells = [
                 str(r['Month']),
                 _mc(_m(s), s, prev_spend),
                 _mc(_n(st_h), st_h, prev_st_hist),
                 _mc(_n(c), c, prev_conv_hist),
                 last_col_str,
-            ])
+            ]
+            if has_revenue:
+                row_cells.append(_mc(_m(rev_h), rev_h, prev_rev_hist))
+            history_rows_html += _td_row(row_cells)
             prev_spend, prev_st_hist, prev_conv_hist = s, st_h, c
+            if has_revenue:
+                prev_rev_hist = rev_h
             sp_months.append(str(r['Month']))
             sp_convs.append(c)
             sp_cpas.append(s / c if c > 0 else 0)
@@ -673,6 +680,8 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         p_spend_badge = float(prev_data['Spend']) if prev_data else None
         p_st_badge    = float(prev_data['Site Traffic']) if prev_data else None
         p_conv_badge  = float(prev_data['Conversions']) if prev_data else None
+        p_rev_badge   = (float(prev_data.get('Revenue', 0) or 0)
+                         if prev_data and float(prev_data.get('Revenue', 0) or 0) else None)
         if low_conv:
             curr_cpv_val = spnd / st if st > 0 else None
             p_cpv_badge  = (float(prev_data['Spend']) / float(prev_data['Site Traffic'])
@@ -681,7 +690,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                 _mc(_m(curr_cpv_val), curr_cpv_val, p_cpv_badge, invert=True)
                 if curr_cpv_val is not None else NA_mom
             )
-            mom_head = _th(['Month', 'Spend', 'Site Traffic', 'Conversions', 'Cost Per Visit'], right_from=1)
+            mom_head_cols = ['Month', 'Spend', 'Site Traffic', 'Conversions', 'Cost Per Visit']
         else:
             curr_cpa      = spnd / conv if conv else None
             p_cpa_badge   = (float(prev_data['Spend']) / float(prev_data['Conversions'])
@@ -690,14 +699,20 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                 _mc(_m(curr_cpa), curr_cpa, p_cpa_badge, invert=True)
                 if curr_cpa is not None else NA_mom
             )
-            mom_head = _th(['Month', 'Spend', 'Site Traffic', 'Conversions', 'CPA'], right_from=1)
-        curr_row = _td_row([
+            mom_head_cols = ['Month', 'Spend', 'Site Traffic', 'Conversions', 'CPA']
+        if has_revenue:
+            mom_head_cols.append('Revenue')
+        mom_head = _th(mom_head_cols, right_from=1)
+        curr_row_cells = [
             f'<strong>{report_month}</strong>',
             _mc(_m(spnd), spnd, p_spend_badge),
             _mc(_n(st), st, p_st_badge),
             _mc(_n(conv), conv, p_conv_badge),
             curr_last_col,
-        ])
+        ]
+        if has_revenue:
+            curr_row_cells.append(_mc(_m(rev), rev, p_rev_badge))
+        curr_row = _td_row(curr_row_cells)
         mom_table = f'''<div class="table-wrap">
       <table>
         <thead>{mom_head}</thead>
