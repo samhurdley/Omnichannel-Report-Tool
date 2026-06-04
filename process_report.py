@@ -1840,7 +1840,8 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
       transform: none !important; left: 0 !important; top: 0 !important; }}
     .slide {{ position: static; display: flex !important; flex-direction: column;
       width: 1440px; height: 810px; overflow: hidden;
-      page-break-after: always; break-after: page; }}
+      page-break-after: always; break-after: page;
+      page-break-inside: avoid; break-inside: avoid; }}
     .slide-cover {{ justify-content: center; }}
     .cover-inner {{ flex: 1; min-height: 0; }}
     .slide-main {{ overflow: hidden; flex: 1; min-height: 0; }}
@@ -1853,18 +1854,18 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     .agp-main {{
       display: flex !important;
       flex-direction: column !important;
-      overflow: visible !important;
+      overflow: hidden !important;
     }}
     .agp-grid {{
       flex: 0 0 auto !important;
       width: 100% !important;
       align-self: stretch !important;
-      overflow: visible !important;
+      overflow: hidden !important;
       min-height: 0 !important;
     }}
     .agp-rows {{
       flex: 0 0 auto !important;
-      overflow: visible !important;
+      overflow: hidden !important;
     }}
     /* Single-row card layouts (1-3 cards): compact rows ~ HTML appearance */
     .agp-grid[data-count="1"] .agp-row,
