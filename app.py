@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-from process_report import process_csv, extract_report_month, find_client_config, html_to_pdf
+from process_report import process_csv, extract_report_month, find_client_config, html_to_pdf, make_driver
 
 st.set_page_config(
     page_title="Report Processor",
@@ -174,44 +174,49 @@ if config_df is not None and csv_files:
 
         results, errors = [], []
         zip_buf = io.BytesIO()
+        need_pdf = output_format in ("PDF", "HTML + PDF")
 
         progress_bar = st.progress(0, text="Starting…")
-
-        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for i, csv_file in enumerate(csv_files):
-                progress_bar.progress(
-                    (i + 1) / len(csv_files),
-                    text=f"Processing {csv_file.name}…",
-                )
-                try:
-                    csv_bytes = csv_file.read()
-                    config_row = find_client_config(csv_file.name, config_df)
-                    client_candidate = str(config_row['Client Name'])
-                    report_month = extract_report_month(csv_file.name)
-                    prev_data = _get_prev_data(history_df, client_candidate, report_month)
-                    client_history = (
-                        history_df[history_df['Client'] == client_candidate].copy()
-                        if not history_df.empty and 'Client' in history_df.columns else None
+        driver = make_driver() if need_pdf else None
+        try:
+            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for i, csv_file in enumerate(csv_files):
+                    progress_bar.progress(
+                        (i + 1) / len(csv_files),
+                        text=f"Processing {csv_file.name}…",
                     )
-
-                    client_name, html_str, totals = process_csv(
-                        csv_bytes, csv_file.name, config_df, prev_data, client_history
-                    )
-                    if output_format in ("HTML", "HTML + PDF"):
-                        zf.writestr(f"{client_name}_report.html", html_str.encode("utf-8"))
-                    if output_format in ("PDF", "HTML + PDF"):
-                        progress_bar.progress(
-                            (i + 1) / len(csv_files),
-                            text=f"Generating PDF for {client_name}…",
+                    try:
+                        csv_bytes = csv_file.read()
+                        config_row = find_client_config(csv_file.name, config_df)
+                        client_candidate = str(config_row['Client Name'])
+                        report_month = extract_report_month(csv_file.name)
+                        prev_data = _get_prev_data(history_df, client_candidate, report_month)
+                        client_history = (
+                            history_df[history_df['Client'] == client_candidate].copy()
+                            if not history_df.empty and 'Client' in history_df.columns else None
                         )
-                        zf.writestr(f"{client_name}_report.pdf", html_to_pdf(html_str))
-                    results.append(client_name)
 
-                    history_df = _upsert_history(history_df, totals)
-                    _save_history(ws, history_df)
+                        client_name, html_str, totals = process_csv(
+                            csv_bytes, csv_file.name, config_df, prev_data, client_history
+                        )
+                        if output_format in ("HTML", "HTML + PDF"):
+                            zf.writestr(f"{client_name}_report.html", html_str.encode("utf-8"))
+                        if need_pdf:
+                            progress_bar.progress(
+                                (i + 1) / len(csv_files),
+                                text=f"Generating PDF for {client_name}…",
+                            )
+                            zf.writestr(f"{client_name}_report.pdf", html_to_pdf(html_str, driver))
+                        results.append(client_name)
 
-                except Exception as e:
-                    errors.append((csv_file.name, str(e)))
+                        history_df = _upsert_history(history_df, totals)
+                        _save_history(ws, history_df)
+
+                    except Exception as e:
+                        errors.append((csv_file.name, str(e)))
+        finally:
+            if driver:
+                driver.quit()
 
         progress_bar.empty()
 

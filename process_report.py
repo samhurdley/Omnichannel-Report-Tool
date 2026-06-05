@@ -1842,7 +1842,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
       width: 1440px; height: 810px; overflow: hidden;
       page-break-after: always; break-after: page;
       page-break-inside: avoid; break-inside: avoid; }}
-    .slide-cover {{ justify-content: center; }}
+    .slide-cover {{ flex: 1; min-height: 0; position: relative; overflow: hidden; }}
     .cover-inner {{ flex: 1; min-height: 0; }}
     .slide-main {{ overflow: hidden; flex: 1; min-height: 0; }}
     .slide-main:not(.table-main) {{ display: flex; flex-direction: column; justify-content: center; }}
@@ -1959,9 +1959,48 @@ def _barlow_font_css() -> str:
     return '<style>' + ''.join(rules) + '</style>'
 
 
-def html_to_pdf(html_str: str) -> bytes:
-    from weasyprint import HTML
-    return HTML(string=html_str).write_pdf()
+def make_driver():
+    import shutil
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1440,810')
+    chromium = shutil.which('chromium') or shutil.which('chromium-browser')
+    if chromium:
+        options.binary_location = chromium
+    chromedriver = shutil.which('chromedriver')
+    service = Service(executable_path=chromedriver) if chromedriver else Service()
+    return webdriver.Chrome(service=service, options=options)
+
+
+def html_to_pdf(html_str: str, driver=None) -> bytes:
+    import os, base64, tempfile
+    close_after = driver is None
+    if driver is None:
+        driver = make_driver()
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.html', delete=False, dir='/tmp'
+        ) as f:
+            f.write(html_str)
+            tmp_path = f.name
+        driver.get(f'file://{tmp_path}')
+        result = driver.execute_cdp_cmd('Page.printToPDF', {
+            'printBackground': True,
+            'preferCSSPageSize': True,
+        })
+        return base64.b64decode(result['data'])
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        if close_after:
+            driver.quit()
 
 
 # ── Core processor ────────────────────────────────────────────────────────────
