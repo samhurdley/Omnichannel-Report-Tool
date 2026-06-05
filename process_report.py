@@ -911,7 +911,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                     if vr_avg_label else 'Visit Rate')
     site_head = (
         f'<tr>{_h_th("Publisher Site")}'
-        f'{_h_th("CPM",right=True)}{_h_th("Attributed Site Traffic",right=True)}'
+        f'{_h_th("CPM",right=True)}{_h_th("CTR %",right=True)}'
         f'{_h_th(vr_th_label,right=True,raw=True)}</tr>'
     )
     for idx, (_, r) in enumerate(grp_site.iterrows()):
@@ -922,7 +922,8 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
                      f'<span class="site-dot"></span>'
                      f'<span class="name-text">{_h(str(r["Site"]))}</span>'
                      f'</span>')
-        site_body += _td_row([site_name, _m(cpm_), _n(r.st), vr_bar])
+        ctr_val = r.clk / r.imp * 100 if r.imp > 0 else 0
+        site_body += _td_row([site_name, _m(cpm_), _p(ctr_val), vr_bar])
 
     site_insight_html = ''
     if not grp_site.empty and imp > 0 and st > 0:
@@ -1183,11 +1184,24 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
 
     # ── Build awareness / display content blocks ─────────────────────────────
     # Minimal grey info boxes — sit under their respective table
+    _aw_chans = sorted(aware_rows['_chan'].unique().tolist()) if not aware_rows.empty else []
+    def _fmt_chan_list(chans):
+        if not chans:
+            return 'Awareness Channels'
+        if len(chans) == 1:
+            return chans[0]
+        return ', '.join(chans[:-1]) + ' &amp; ' + chans[-1]
+    aw_ch_label = _fmt_chan_list(_aw_chans)
+    total_aware_conv = int(aware_rows['conv'].sum()) if not aware_rows.empty else 0
+    _aw_conv_sentence = (
+        f' While the objective for these channels is to drive awareness, they drove'
+        f' <strong>{_n(total_aware_conv)}</strong> conversions in {report_month}.'
+    ) if total_aware_conv > 0 else ''
     aw_info = (
-        '<div class="context-box"><strong style="color:#C4B5D4">Awareness Channels</strong>'
-        ' — Video, CTV &amp; Audio are built for <strong>reach and recall</strong>, not immediate'
-        ' conversions. The goal is to put your brand in front of as many of the right people as'
-        ' possible, as efficiently as possible.</div>'
+        f'<div class="context-box"><strong style="color:#C4B5D4">Awareness Channels</strong>'
+        f' — {aw_ch_label} are built for <strong>reach and recall</strong>, not immediate'
+        f' conversions. The goal is to put your brand in front of as many of the right people as'
+        f' possible, as efficiently as possible.{_aw_conv_sentence}</div>'
     )
     disp_info = (
         '<div class="context-box"><strong style="color:#C4B5D4">Display Advertising</strong>'
@@ -1236,7 +1250,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
   <div class="slide-main ch-perf-main">
     <div class="ch-perf-body">
       <div class="ch-perf-section">
-        <div class="ch-perf-col-label">Awareness — Video, CTV &amp; Audio</div>
+        <div class="ch-perf-col-label">Awareness — {aw_ch_label}</div>
         <div class="table-wrap">{aw_table_html}</div>
         {aw_info}
       </div>
@@ -1305,7 +1319,7 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     else:
         top_site_names = []
     site_optim = _optim_note('sites', top_site_names) if top_site_names else ''
-    slides.append(('table', _tslide('Top 10 Sites by Site Traffic',
+    slides.append(('table', _tslide('Top 10 Sites by Impressions',
         f'<table><thead>{site_head}</thead><tbody>{site_body}</tbody></table>',
         site_insight_html + site_optim + _vr_key_html)))
 
@@ -2073,9 +2087,10 @@ def process_csv(csv_bytes, csv_filename, config_df, prev_data=None, client_histo
     grp_site = df_sites.groupby('Site').agg(
         imp=('Impressions', 'sum'),
         spnd=('Advertiser Cost (Adv Currency)', 'sum'),
+        clk=('Clicks', 'sum'),
         st=('_st', 'sum'),
         rev=('_rev', 'sum')
-    ).reset_index().sort_values('st', ascending=False).head(10)
+    ).reset_index().sort_values('imp', ascending=False).head(10)
 
     grp_adgroup = None
     if 'Ad Group' in df.columns:
