@@ -397,6 +397,7 @@ def _h_th(label, right=False, raw=False):
 
 # ── Ad Group Performance helpers ──────────────────────────────────────────────
 _VISIT_RATE_CHANNELS_AGP = {'CTV', 'Audio', 'Video'}
+MIN_AGP_IMP = 1_000  # hide ad groups with fewer impressions than this
 
 def _agp_bar_row(label, val_str, val, avg_val, is_inverse=False):
     """One row in the ad-group performance chart.
@@ -426,7 +427,7 @@ def _agp_card_html(chan, chan_rows, use_cpa):
     is_inverse = use_cpa  # CPA: lower better; Visit Rate: higher better
 
     if use_cpa:
-        valid = chan_rows[chan_rows['conv'] > 0].copy()
+        valid = chan_rows[(chan_rows['conv'] > 0) & (chan_rows['imp'] >= MIN_AGP_IMP)].copy()
         if len(valid) < 2:
             return ''
         valid['_val']     = valid['spnd'] / valid['conv']
@@ -436,7 +437,7 @@ def _agp_card_html(chan, chan_rows, use_cpa):
         metric_lbl = 'Cost per Conv (CPA)'
         valid = valid.sort_values('_val', ascending=True)   # lowest CPA first = best
     else:
-        valid = chan_rows[(chan_rows['imp'] > 0) & (chan_rows['st'] > 0)].copy()
+        valid = chan_rows[(chan_rows['imp'] >= MIN_AGP_IMP) & (chan_rows['st'] > 0)].copy()
         if len(valid) < 2:
             return ''
         valid['_val']     = valid['st'] / valid['imp'] * 100
