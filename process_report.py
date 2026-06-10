@@ -285,7 +285,15 @@ def _stacked_budget_bar_html(segments):
                  if p >= 11 else '')
         bars += (f'<div class="sbb-seg" style="width:{p:.1f}%;background:{c}"'
                  f' title="{_h(l)}: {p:.0f}%">{inner}</div>')
-    return f'<div class="sbb-track">{bars}</div>'
+    legend_items = ''.join(
+        f'<span class="sbb-legend-item">'
+        f'<span class="sbb-legend-dot" style="background:{c}"></span>'
+        f'{_h(l)} <strong>{p:.0f}%</strong>'
+        f'</span>'
+        for l, p, c in segments
+    )
+    legend = f'<div class="sbb-legend">{legend_items}</div>'
+    return f'<div class="sbb-track">{bars}</div>{legend}'
 
 def _index_bar_html(value_str, val, avg_val, max_val, is_inverse=False):
     if max_val <= 0:
@@ -1508,6 +1516,18 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     font-size: 14px; font-weight: 700; color: #fff;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }}
+  .sbb-legend {{
+    display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px;
+  }}
+  .sbb-legend-item {{
+    display: flex; align-items: center; gap: 5px;
+    font-size: 12px; color: rgba(255,255,255,0.7);
+    white-space: nowrap;
+  }}
+  .sbb-legend-dot {{
+    width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
+  }}
+  .sbb-legend-item strong {{ color: #fff; }}
 
   /* ── MoM slide ──────────────────────────────────────────────────────────── */
   .mom-main {{ display: flex; flex-direction: column; justify-content: center; padding-top: 4px; }}
