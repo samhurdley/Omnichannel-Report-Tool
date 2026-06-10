@@ -2104,7 +2104,11 @@ def process_csv(csv_bytes, csv_filename, config_df, prev_data=None, client_histo
         pcv=('Player Completed Views', 'sum'), rev=('_rev', 'sum')
     ).reset_index().sort_values('conv', ascending=False)
 
-    df_sites = df[~df['Site'].str.contains(r'\[tail aggregate\]', case=False, na=False)]
+    _SITE_CHANNELS = {'Display', 'Video'}
+    df_sites = df[
+        df['_chan'].isin(_SITE_CHANNELS) &
+        ~df['Site'].str.contains(r'\[tail aggregate\]', case=False, na=False)
+    ]
     grp_site = df_sites.groupby('Site').agg(
         imp=('Impressions', 'sum'),
         spnd=('Advertiser Cost (Adv Currency)', 'sum'),
