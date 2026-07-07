@@ -1994,58 +1994,28 @@ def _barlow_font_css() -> str:
     return '<style>' + ''.join(rules) + '</style>'
 
 
-def _diagnose_chromium(chromium_path, flags):
-    # TEMP DIAGNOSTIC (round 4): round 3's gdb attempt failed because
-    # /usr/bin/chromium is Debian's wrapper *shell script*, not the real ELF
-    # binary - gdb can't debug a script directly. Dump the wrapper (Debian's
-    # chromium wrapper often injects extra flags via /etc/chromium.d/, which
-    # would explain behavior we can't account for from our own flags), find
-    # the real binary, and point gdb at that instead.
-    import subprocess, shutil, sys, os, glob
+def _diagnose_cpu():
+    # TEMP DIAGNOSTIC (round 5): --no-zygote and --single-process both
+    # failed to move the crash address at all (identical address under gdb,
+    # which disables ASLR - meaning the crash point is independent of
+    # process-model flags entirely). That rules out multi-process
+    # coordination as the cause. Leading remaining theory: Chromium/V8
+    # requires a CPU instruction set this host doesn't have, and aborts via
+    # the same silent trap-based crash mechanism. Check /proc/cpuinfo
+    # directly instead of guessing more flags.
+    import sys
     try:
-        with open(chromium_path, 'r', errors='replace') as f:
-            print(f"[diag4] wrapper script contents:\n{f.read()[:2000]}", file=sys.stdout, flush=True)
+        with open('/proc/cpuinfo') as f:
+            cpuinfo = f.read()
+        first_flags_line = next((l for l in cpuinfo.splitlines() if l.startswith('flags')), '')
+        model_line = next((l for l in cpuinfo.splitlines() if l.startswith('model name')), '')
+        present_flags = set(first_flags_line.split(':', 1)[-1].split())
+        watch = ['sse4_2', 'popcnt', 'avx', 'avx2', 'bmi1', 'bmi2', 'fma', 'lzcnt', 'movbe', 'f16c']
+        status = {flag: (flag in present_flags) for flag in watch}
+        print(f"[diag5] {model_line.strip()}", file=sys.stdout, flush=True)
+        print(f"[diag5] cpu feature check: {status}", file=sys.stdout, flush=True)
     except Exception as e:
-        print(f"[diag4] could not read wrapper script: {e!r}", file=sys.stdout, flush=True)
-
-    for d in ('/etc/chromium.d', '/etc/chromium-browser'):
-        if os.path.isdir(d):
-            for fn in sorted(os.listdir(d)):
-                p = os.path.join(d, fn)
-                try:
-                    with open(p, 'r', errors='replace') as f:
-                        print(f"[diag4] {p}:\n{f.read()[:1000]}", file=sys.stdout, flush=True)
-                except Exception as e:
-                    print(f"[diag4] could not read {p}: {e!r}", file=sys.stdout, flush=True)
-
-    real_binary = None
-    for c in ['/usr/lib/chromium/chromium', '/usr/lib/chromium-browser/chromium',
-              *glob.glob('/usr/lib/chromium*/chromium*'), *glob.glob('/opt/chromium*/chrome*')]:
-        if os.path.isfile(c) and os.access(c, os.X_OK):
-            try:
-                with open(c, 'rb') as f:
-                    if f.read(4) == b'\x7fELF':
-                        real_binary = c
-                        break
-            except Exception:
-                pass
-    print(f"[diag4] real_binary={real_binary!r}", file=sys.stdout, flush=True)
-
-    gdb = shutil.which('gdb')
-    if not gdb or not real_binary:
-        print(f"[diag4] skipping gdb run: gdb={gdb!r} real_binary={real_binary!r}", file=sys.stdout, flush=True)
-        return
-    try:
-        result = subprocess.run(
-            [gdb, '--batch', '-ex', 'run', '-ex', 'bt', '-ex', 'quit',
-             '--args', real_binary, *flags, '--dump-dom', 'about:blank'],
-            capture_output=True, text=True, timeout=40,
-        )
-        print(f"[diag4] gdb returncode={result.returncode}", file=sys.stdout, flush=True)
-        print(f"[diag4] gdb stdout={result.stdout[:6000]!r}", file=sys.stdout, flush=True)
-        print(f"[diag4] gdb stderr={result.stderr[:3000]!r}", file=sys.stdout, flush=True)
-    except Exception as e:
-        print(f"[diag4] gdb invocation raised: {e!r}", file=sys.stdout, flush=True)
+        print(f"[diag5] could not read /proc/cpuinfo: {e!r}", file=sys.stdout, flush=True)
 
 
 def make_driver():
@@ -2064,7 +2034,7 @@ def make_driver():
     chromium = shutil.which('chromium') or shutil.which('chromium-browser')
     if chromium:
         options.binary_location = chromium
-        _diagnose_chromium(chromium, flags)
+        _diagnose_cpu()
     chromedriver = shutil.which('chromedriver')
     service = Service(executable_path=chromedriver) if chromedriver else Service()
     return webdriver.Chrome(service=service, options=options)
