@@ -1994,8 +1994,31 @@ def _barlow_font_css() -> str:
     return '<style>' + ''.join(rules) + '</style>'
 
 
+def _diagnose_chromium(chromium_path):
+    # TEMP DIAGNOSTIC: Selenium/ChromeDriver report only "Chrome instance
+    # exited" with no reason. Run Chrome directly so we see its real exit
+    # signal (e.g. SIGILL from a missing CPU feature, SIGSEGV, SIGKILL from
+    # OOM) and raw stderr, which ChromeDriver isn't surfacing.
+    import subprocess, signal, sys
+    try:
+        result = subprocess.run(
+            [chromium_path, '--headless', '--no-sandbox', '--disable-gpu',
+             '--disable-dev-shm-usage', '--dump-dom', 'about:blank'],
+            capture_output=True, text=True, timeout=20,
+        )
+        print(f"[diag] chromium direct-run returncode={result.returncode}", file=sys.stdout, flush=True)
+        if result.returncode < 0:
+            sig = -result.returncode
+            name = signal.Signals(sig).name if sig in signal.Signals._value2member_map_ else str(sig)
+            print(f"[diag] killed by signal {sig} ({name})", file=sys.stdout, flush=True)
+        print(f"[diag] stdout={result.stdout[:2000]!r}", file=sys.stdout, flush=True)
+        print(f"[diag] stderr={result.stderr[:2000]!r}", file=sys.stdout, flush=True)
+    except Exception as e:
+        print(f"[diag] direct chromium invocation raised: {e!r}", file=sys.stdout, flush=True)
+
+
 def make_driver():
-    import shutil, sys
+    import shutil
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.chrome.service import Service
@@ -2005,19 +2028,12 @@ def make_driver():
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1440,810')
-    # TEMP DIAGNOSTIC: surface Chrome's own startup failure reason (segfault,
-    # missing lib, sandbox denial) in the Streamlit Cloud app logs, since
-    # SessionNotCreatedException alone only reports "Chrome instance exited".
-    options.add_argument('--enable-logging=stderr')
-    options.add_argument('--v=1')
     chromium = shutil.which('chromium') or shutil.which('chromium-browser')
     if chromium:
         options.binary_location = chromium
+        _diagnose_chromium(chromium)
     chromedriver = shutil.which('chromedriver')
-    service = (
-        Service(executable_path=chromedriver, service_args=['--verbose'], log_output=sys.stdout)
-        if chromedriver else Service(log_output=sys.stdout)
-    )
+    service = Service(executable_path=chromedriver) if chromedriver else Service()
     return webdriver.Chrome(service=service, options=options)
 
 
