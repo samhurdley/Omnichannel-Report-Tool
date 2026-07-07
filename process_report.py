@@ -1995,25 +1995,28 @@ def _barlow_font_css() -> str:
 
 
 def _diagnose_chromium(chromium_path, flags):
-    # TEMP DIAGNOSTIC (round 2): --no-zygote alone did not fix the crash.
-    # Re-run chromium directly with the *exact* flags make_driver() uses, to
-    # see whether the same "Failed to adjust OOM score" + fatal signal still
-    # happens, or whether something else is now the proximate cause.
-    import subprocess, signal, sys
+    # TEMP DIAGNOSTIC (round 3): with --no-zygote, the "Failed to adjust OOM
+    # score" warning is gone but Chrome still dies via SIGTRAP with zero
+    # descriptive stderr. That's consistent with Chromium's IMMEDIATE_CRASH()
+    # path (used for sandbox self-verification / CFI / security CHECK
+    # failures), which deliberately prints nothing. Run it under gdb so we
+    # can see which module/function the trap actually happens in.
+    import subprocess, shutil, sys
+    gdb = shutil.which('gdb')
+    if not gdb:
+        print("[diag3] gdb not found on PATH", file=sys.stdout, flush=True)
+        return
     try:
         result = subprocess.run(
-            [chromium_path, *flags, '--dump-dom', 'about:blank'],
-            capture_output=True, text=True, timeout=20,
+            [gdb, '--batch', '-ex', 'run', '-ex', 'bt', '-ex', 'info registers',
+             '-ex', 'quit', '--args', chromium_path, *flags, '--dump-dom', 'about:blank'],
+            capture_output=True, text=True, timeout=40,
         )
-        print(f"[diag2] returncode={result.returncode}", file=sys.stdout, flush=True)
-        if result.returncode < 0:
-            sig = -result.returncode
-            name = signal.Signals(sig).name if sig in signal.Signals._value2member_map_ else str(sig)
-            print(f"[diag2] killed by signal {sig} ({name})", file=sys.stdout, flush=True)
-        print(f"[diag2] stdout={result.stdout[:3000]!r}", file=sys.stdout, flush=True)
-        print(f"[diag2] stderr={result.stderr[:3000]!r}", file=sys.stdout, flush=True)
+        print(f"[diag3] gdb returncode={result.returncode}", file=sys.stdout, flush=True)
+        print(f"[diag3] gdb stdout={result.stdout[:6000]!r}", file=sys.stdout, flush=True)
+        print(f"[diag3] gdb stderr={result.stderr[:3000]!r}", file=sys.stdout, flush=True)
     except Exception as e:
-        print(f"[diag2] direct chromium invocation raised: {e!r}", file=sys.stdout, flush=True)
+        print(f"[diag3] gdb invocation raised: {e!r}", file=sys.stdout, flush=True)
 
 
 def make_driver():
