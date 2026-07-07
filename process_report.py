@@ -1995,28 +1995,57 @@ def _barlow_font_css() -> str:
 
 
 def _diagnose_chromium(chromium_path, flags):
-    # TEMP DIAGNOSTIC (round 3): with --no-zygote, the "Failed to adjust OOM
-    # score" warning is gone but Chrome still dies via SIGTRAP with zero
-    # descriptive stderr. That's consistent with Chromium's IMMEDIATE_CRASH()
-    # path (used for sandbox self-verification / CFI / security CHECK
-    # failures), which deliberately prints nothing. Run it under gdb so we
-    # can see which module/function the trap actually happens in.
-    import subprocess, shutil, sys
+    # TEMP DIAGNOSTIC (round 4): round 3's gdb attempt failed because
+    # /usr/bin/chromium is Debian's wrapper *shell script*, not the real ELF
+    # binary - gdb can't debug a script directly. Dump the wrapper (Debian's
+    # chromium wrapper often injects extra flags via /etc/chromium.d/, which
+    # would explain behavior we can't account for from our own flags), find
+    # the real binary, and point gdb at that instead.
+    import subprocess, shutil, sys, os, glob
+    try:
+        with open(chromium_path, 'r', errors='replace') as f:
+            print(f"[diag4] wrapper script contents:\n{f.read()[:2000]}", file=sys.stdout, flush=True)
+    except Exception as e:
+        print(f"[diag4] could not read wrapper script: {e!r}", file=sys.stdout, flush=True)
+
+    for d in ('/etc/chromium.d', '/etc/chromium-browser'):
+        if os.path.isdir(d):
+            for fn in sorted(os.listdir(d)):
+                p = os.path.join(d, fn)
+                try:
+                    with open(p, 'r', errors='replace') as f:
+                        print(f"[diag4] {p}:\n{f.read()[:1000]}", file=sys.stdout, flush=True)
+                except Exception as e:
+                    print(f"[diag4] could not read {p}: {e!r}", file=sys.stdout, flush=True)
+
+    real_binary = None
+    for c in ['/usr/lib/chromium/chromium', '/usr/lib/chromium-browser/chromium',
+              *glob.glob('/usr/lib/chromium*/chromium*'), *glob.glob('/opt/chromium*/chrome*')]:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            try:
+                with open(c, 'rb') as f:
+                    if f.read(4) == b'\x7fELF':
+                        real_binary = c
+                        break
+            except Exception:
+                pass
+    print(f"[diag4] real_binary={real_binary!r}", file=sys.stdout, flush=True)
+
     gdb = shutil.which('gdb')
-    if not gdb:
-        print("[diag3] gdb not found on PATH", file=sys.stdout, flush=True)
+    if not gdb or not real_binary:
+        print(f"[diag4] skipping gdb run: gdb={gdb!r} real_binary={real_binary!r}", file=sys.stdout, flush=True)
         return
     try:
         result = subprocess.run(
-            [gdb, '--batch', '-ex', 'run', '-ex', 'bt', '-ex', 'info registers',
-             '-ex', 'quit', '--args', chromium_path, *flags, '--dump-dom', 'about:blank'],
+            [gdb, '--batch', '-ex', 'run', '-ex', 'bt', '-ex', 'quit',
+             '--args', real_binary, *flags, '--dump-dom', 'about:blank'],
             capture_output=True, text=True, timeout=40,
         )
-        print(f"[diag3] gdb returncode={result.returncode}", file=sys.stdout, flush=True)
-        print(f"[diag3] gdb stdout={result.stdout[:6000]!r}", file=sys.stdout, flush=True)
-        print(f"[diag3] gdb stderr={result.stderr[:3000]!r}", file=sys.stdout, flush=True)
+        print(f"[diag4] gdb returncode={result.returncode}", file=sys.stdout, flush=True)
+        print(f"[diag4] gdb stdout={result.stdout[:6000]!r}", file=sys.stdout, flush=True)
+        print(f"[diag4] gdb stderr={result.stderr[:3000]!r}", file=sys.stdout, flush=True)
     except Exception as e:
-        print(f"[diag3] gdb invocation raised: {e!r}", file=sys.stdout, flush=True)
+        print(f"[diag4] gdb invocation raised: {e!r}", file=sys.stdout, flush=True)
 
 
 def make_driver():
