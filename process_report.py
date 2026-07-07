@@ -1994,50 +1994,24 @@ def _barlow_font_css() -> str:
     return '<style>' + ''.join(rules) + '</style>'
 
 
-def _diagnose_cpu():
-    # TEMP DIAGNOSTIC (round 5): --no-zygote and --single-process both
-    # failed to move the crash address at all (identical address under gdb,
-    # which disables ASLR - meaning the crash point is independent of
-    # process-model flags entirely). That rules out multi-process
-    # coordination as the cause. Leading remaining theory: Chromium/V8
-    # requires a CPU instruction set this host doesn't have, and aborts via
-    # the same silent trap-based crash mechanism. Check /proc/cpuinfo
-    # directly instead of guessing more flags.
-    import sys
-    try:
-        with open('/proc/cpuinfo') as f:
-            cpuinfo = f.read()
-        first_flags_line = next((l for l in cpuinfo.splitlines() if l.startswith('flags')), '')
-        model_line = next((l for l in cpuinfo.splitlines() if l.startswith('model name')), '')
-        present_flags = set(first_flags_line.split(':', 1)[-1].split())
-        watch = ['sse4_2', 'popcnt', 'avx', 'avx2', 'bmi1', 'bmi2', 'fma', 'lzcnt', 'movbe', 'f16c']
-        status = {flag: (flag in present_flags) for flag in watch}
-        print(f"[diag5] {model_line.strip()}", file=sys.stdout, flush=True)
-        print(f"[diag5] cpu feature check: {status}", file=sys.stdout, flush=True)
-    except Exception as e:
-        print(f"[diag5] could not read /proc/cpuinfo: {e!r}", file=sys.stdout, flush=True)
-
-
 def make_driver():
-    import shutil
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
-    flags = [
-        '--headless', '--no-sandbox', '--disable-dev-shm-usage',
-        '--disable-gpu', '--window-size=1440,810', '--no-zygote',
-        '--single-process',
-    ]
     options = Options()
-    for flag in flags:
-        options.add_argument(flag)
-    chromium = shutil.which('chromium') or shutil.which('chromium-browser')
-    if chromium:
-        options.binary_location = chromium
-        _diagnose_cpu()
-    chromedriver = shutil.which('chromedriver')
-    service = Service(executable_path=chromedriver) if chromedriver else Service()
-    return webdriver.Chrome(service=service, options=options)
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1440,810')
+    # Don't set binary_location or a Service executable_path: that would
+    # point Selenium at Debian's apt-packaged chromium, whose version is
+    # unpinned in packages.txt and drifts on every container rebuild (a
+    # routine Debian security update broke it here with zero code changes).
+    # Pinning browser_version makes Selenium Manager download and cache its
+    # own known-good "Chrome for Testing" build instead, decoupled from
+    # whatever Debian currently ships.
+    options.browser_version = 'stable'
+    return webdriver.Chrome(options=options)
 
 
 def html_to_pdf(html_str: str, driver=None) -> bytes:

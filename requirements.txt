@@ -3,4 +3,4 @@ pandas
 openpyxl
 gspread
 google-auth
-selenium
+selenium==4.45.0
