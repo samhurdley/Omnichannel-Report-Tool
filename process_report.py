@@ -2056,6 +2056,7 @@ def make_driver():
     flags = [
         '--headless', '--no-sandbox', '--disable-dev-shm-usage',
         '--disable-gpu', '--window-size=1440,810', '--no-zygote',
+        '--single-process',
     ]
     options = Options()
     for flag in flags:
