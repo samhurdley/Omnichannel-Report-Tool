@@ -1994,25 +1994,44 @@ def _barlow_font_css() -> str:
     return '<style>' + ''.join(rules) + '</style>'
 
 
+def _diagnose_chromium(chromium_path, flags):
+    # TEMP DIAGNOSTIC (round 2): --no-zygote alone did not fix the crash.
+    # Re-run chromium directly with the *exact* flags make_driver() uses, to
+    # see whether the same "Failed to adjust OOM score" + fatal signal still
+    # happens, or whether something else is now the proximate cause.
+    import subprocess, signal, sys
+    try:
+        result = subprocess.run(
+            [chromium_path, *flags, '--dump-dom', 'about:blank'],
+            capture_output=True, text=True, timeout=20,
+        )
+        print(f"[diag2] returncode={result.returncode}", file=sys.stdout, flush=True)
+        if result.returncode < 0:
+            sig = -result.returncode
+            name = signal.Signals(sig).name if sig in signal.Signals._value2member_map_ else str(sig)
+            print(f"[diag2] killed by signal {sig} ({name})", file=sys.stdout, flush=True)
+        print(f"[diag2] stdout={result.stdout[:3000]!r}", file=sys.stdout, flush=True)
+        print(f"[diag2] stderr={result.stderr[:3000]!r}", file=sys.stdout, flush=True)
+    except Exception as e:
+        print(f"[diag2] direct chromium invocation raised: {e!r}", file=sys.stdout, flush=True)
+
+
 def make_driver():
     import shutil
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.chrome.service import Service
+    flags = [
+        '--headless', '--no-sandbox', '--disable-dev-shm-usage',
+        '--disable-gpu', '--window-size=1440,810', '--no-zygote',
+    ]
     options = Options()
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1440,810')
-    # Chromium's zygote tries to adjust each renderer's OOM score; Streamlit
-    # Cloud's container denies that (EPERM), and Chromium 150+ treats the
-    # denial as fatal and self-terminates (SIGTRAP) instead of warning.
-    # --no-zygote spawns renderers directly, skipping that code path.
-    options.add_argument('--no-zygote')
+    for flag in flags:
+        options.add_argument(flag)
     chromium = shutil.which('chromium') or shutil.which('chromium-browser')
     if chromium:
         options.binary_location = chromium
+        _diagnose_chromium(chromium, flags)
     chromedriver = shutil.which('chromedriver')
     service = Service(executable_path=chromedriver) if chromedriver else Service()
     return webdriver.Chrome(service=service, options=options)
