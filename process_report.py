@@ -1995,7 +1995,7 @@ def _barlow_font_css() -> str:
 
 
 def make_driver():
-    import shutil
+    import shutil, sys
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.chrome.service import Service
@@ -2005,11 +2005,19 @@ def make_driver():
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1440,810')
+    # TEMP DIAGNOSTIC: surface Chrome's own startup failure reason (segfault,
+    # missing lib, sandbox denial) in the Streamlit Cloud app logs, since
+    # SessionNotCreatedException alone only reports "Chrome instance exited".
+    options.add_argument('--enable-logging=stderr')
+    options.add_argument('--v=1')
     chromium = shutil.which('chromium') or shutil.which('chromium-browser')
     if chromium:
         options.binary_location = chromium
     chromedriver = shutil.which('chromedriver')
-    service = Service(executable_path=chromedriver) if chromedriver else Service()
+    service = (
+        Service(executable_path=chromedriver, service_args=['--verbose'], log_output=sys.stdout)
+        if chromedriver else Service(log_output=sys.stdout)
+    )
     return webdriver.Chrome(service=service, options=options)
 
 
