@@ -1995,23 +1995,57 @@ def _barlow_font_css() -> str:
 
 
 def make_driver():
+    import os
+    from pathlib import Path
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     options = Options()
-    options.add_argument('--headless')
+    # Force Selenium Manager to use its own Chrome-for-Testing + chromedriver
+    # instead of the Debian-packaged binaries present in PATH on Streamlit.
+    os.environ['SE_FORCE_BROWSER_DOWNLOAD'] = 'true'
+    os.environ['SE_SKIP_BROWSER_IN_PATH'] = 'true'
+    os.environ['SE_SKIP_DRIVER_IN_PATH'] = 'true'
+    os.environ['SE_AVOID_STATS'] = 'true'
+    os.environ['SE_DEBUG'] = 'true'
+    os.environ.setdefault('SE_CACHE_PATH', '/tmp/selenium-cache')
+
+    options.add_argument('--headless=new')
     options.add_argument('--no-sandbox')
+    options.add_argument('--disable-setuid-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
+    options.add_argument('--no-zygote')
     options.add_argument('--window-size=1440,810')
-    # Don't set binary_location or a Service executable_path: that would
-    # point Selenium at Debian's apt-packaged chromium, whose version is
-    # unpinned in packages.txt and drifts on every container rebuild (a
-    # routine Debian security update broke it here with zero code changes).
-    # Pinning browser_version makes Selenium Manager download and cache its
-    # own known-good "Chrome for Testing" build instead, decoupled from
-    # whatever Debian currently ships.
+    # Request Selenium Manager's Chrome-for-Testing stable channel.
     options.browser_version = 'stable'
-    return webdriver.Chrome(options=options)
+    print(
+        '[pdf] starting Chrome with Selenium Manager '
+        f"(cache={os.environ['SE_CACHE_PATH']}, browser_version={options.browser_version})",
+        flush=True,
+    )
+    try:
+        driver = webdriver.Chrome(options=options)
+        print(
+            f"[pdf] Chrome started: browser={driver.capabilities.get('browserVersion')} "
+            f"binary={driver.capabilities.get('goog:chromeOptions', {}).get('binary')}",
+            flush=True,
+        )
+        return driver
+    except Exception as e:
+        cache_path = Path(os.environ['SE_CACHE_PATH'])
+        cache_exists = cache_path.exists()
+        top_level = []
+        if cache_exists:
+            try:
+                top_level = sorted(p.name for p in cache_path.iterdir())[:10]
+            except Exception:
+                top_level = ['<unavailable>']
+        print(
+            f'[pdf] Chrome startup failed: {e!r}; '
+            f'cache_exists={cache_exists}; cache_entries={top_level}',
+            flush=True,
+        )
+        raise
 
 
 def html_to_pdf(html_str: str, driver=None) -> bytes:
