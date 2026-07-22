@@ -74,10 +74,24 @@ def extract_date_range(filename):
         return f"{fmt(dates[0])} – {fmt(dates[1])}"
     return ''
 
+_MONTH_NAME_RE = re.compile(
+    r'(January|February|March|April|May|June|July|August|September|October|November|December)'
+    r'\s+(\d{4}|\d{2})\b',
+    re.IGNORECASE,
+)
+
 def extract_report_month(filename):
+    # Falls back to "Month YYYY" for files renamed off Trade Desk's ISO date-range pattern.
     dates = _extract_dates(filename)
     if dates:
         return datetime.strptime(dates[0], '%Y-%m-%d').strftime('%B %Y')
+    m = _MONTH_NAME_RE.search(os.path.basename(filename))
+    if m:
+        month_name = m.group(1).capitalize()
+        year = m.group(2)
+        if len(year) == 2:
+            year = '20' + year
+        return f'{month_name} {year}'
     return ''
 
 def extract_adgroup_label(ag_full):
@@ -2111,6 +2125,16 @@ def process_csv(csv_bytes, csv_filename, config_df, prev_data=None, client_histo
     """
     config_row  = find_client_config(csv_filename, config_df)
     client_name = str(config_row['Client Name'])
+
+    if not extract_report_month(csv_filename):
+        raise ValueError(
+            f"Couldn't determine the report month from '{csv_filename}'. "
+            "Expected either a Trade Desk-style date range (e.g. "
+            "'..._2026-06-01_2026-07-01_...') or a month name and year "
+            "(e.g. 'June 2026') in the filename. Rename the file and "
+            "re-upload — processing with an unknown month would corrupt "
+            "the History sheet's month-on-month tracking for this client."
+        )
 
     df = pd.read_csv(io.BytesIO(csv_bytes))
     conv_cols = find_conv_cols(df.columns, config_row)
