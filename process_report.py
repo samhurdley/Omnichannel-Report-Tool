@@ -161,6 +161,12 @@ _KPI_CYCLE = ['#EF426F', '#5BC2E7']
 # Cost Per Visit (CPV = Spend ÷ Site Traffic) wherever CPA would appear.
 CONV_THRESHOLD = 20
 
+# If total campaign conversions exceed this threshold, swap Visit Rate for
+# Conversion Rate (Conversions ÷ Impressions) on performance slides (AGP cards,
+# Remarketing Hub, Top 10 Sites/Creatives, Display Conversion table). Independent
+# axis from CONV_THRESHOLD above — the two do not interact.
+CONV_RATE_THRESHOLD = 1000
+
 def _delta_badge(curr_val, prev_val, invert=False):
     if not prev_val:
         return ''
@@ -430,9 +436,9 @@ def _agp_bar_row(label, val_str, val, avg_val, is_inverse=False):
         f'</div>'
     )
 
-def _agp_card_html(chan, chan_rows, use_cpa):
+def _agp_card_html(chan, chan_rows, use_cpa, use_conv_rate=False):
     """Build one channel card. Returns '' if fewer than 2 valid rows."""
-    is_inverse = use_cpa  # CPA: lower better; Visit Rate: higher better
+    is_inverse = use_cpa  # CPA: lower better; Visit Rate/Conversion Rate: higher better
 
     if use_cpa:
         valid = chan_rows[(chan_rows['conv'] > 0) & (chan_rows['imp'] >= MIN_AGP_IMP)].copy()
@@ -445,15 +451,16 @@ def _agp_card_html(chan, chan_rows, use_cpa):
         metric_lbl = 'Cost per Conv (CPA)'
         valid = valid.sort_values('_val', ascending=True)   # lowest CPA first = best
     else:
-        valid = chan_rows[(chan_rows['imp'] >= MIN_AGP_IMP) & (chan_rows['st'] > 0)].copy()
+        numer_col  = 'conv' if use_conv_rate else 'st'
+        metric_lbl = 'Conversion Rate' if use_conv_rate else 'Visit Rate'
+        valid = chan_rows[(chan_rows['imp'] >= MIN_AGP_IMP) & (chan_rows[numer_col] > 0)].copy()
         if len(valid) < 2:
             return ''
-        valid['_val']     = valid['st'] / valid['imp'] * 100
+        valid['_val']     = valid[numer_col] / valid['imp'] * 100
         valid['_val_str'] = valid['_val'].apply(_p)
-        avg_val    = valid['st'].sum() / valid['imp'].sum() * 100
+        avg_val    = valid[numer_col].sum() / valid['imp'].sum() * 100
         avg_str    = _p(avg_val)
-        metric_lbl = 'Visit Rate'
-        valid = valid.sort_values('_val', ascending=False)  # highest VR first = best
+        valid = valid.sort_values('_val', ascending=False)  # highest rate first = best
 
     valid = valid.head(4)
 
@@ -493,7 +500,7 @@ def _agp_card_html(chan, chan_rows, use_cpa):
     )
 
 
-def _agp_remarketing_hub_html(remark_by_chan, display_total_conv, prosp_by_chan=None):
+def _agp_remarketing_hub_html(remark_by_chan, display_total_conv, prosp_by_chan=None, use_conv_rate=False):
     """Build the Remarketing Hub summary card from {chan: rows_df}.
     Shows one aggregated row per channel with a % vs prospecting-average badge.
     Returns '' if no remarketing data exists."""
@@ -518,14 +525,15 @@ def _agp_remarketing_hub_html(remark_by_chan, display_total_conv, prosp_by_chan=
             p_conv     = prosp['conv'].sum() if not prosp.empty else 0
             prosp_avg  = p_spnd / p_conv if p_conv > 0 else None
         else:
+            numer_col  = 'conv' if use_conv_rate else 'st'
+            metric_lbl = 'Conversion Rate' if use_conv_rate else 'Visit Rate'
             total_imp  = rows['imp'].sum()
-            total_st   = rows['st'].sum()
-            val        = total_st / total_imp * 100 if total_imp > 0 else None
+            total_num  = rows[numer_col].sum()
+            val        = total_num / total_imp * 100 if total_imp > 0 else None
             val_str    = _p(val) if val is not None else 'N/A'
-            metric_lbl = 'Visit Rate'
             p_imp      = prosp['imp'].sum() if not prosp.empty else 0
-            p_st       = prosp['st'].sum()  if not prosp.empty else 0
-            prosp_avg  = p_st / p_imp * 100 if p_imp > 0 else None
+            p_num      = prosp[numer_col].sum() if not prosp.empty else 0
+            prosp_avg  = p_num / p_imp * 100 if p_imp > 0 else None
 
         # % vs prospecting-average badge
         vs_html = ''
@@ -610,6 +618,11 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     low_conv = (conv < CONV_THRESHOLD)
     cpv      = spnd / st if st > 0 else 0
     prev_cpv = ps   / p_st if p_st > 0 else 0
+
+    # High-volume clients get Conversion Rate instead of Visit Rate on performance
+    # slides. Independent of low_conv — a client can be low_conv=False (≥20 conv)
+    # and still below 1000 (Visit Rate), or above 1000 (Conversion Rate + CPA active).
+    use_conv_rate = conv > CONV_RATE_THRESHOLD
 
     # ── MoM table ─────────────────────────────────────────────────────────────
     def _mc(main, curr, prev, invert=False):
@@ -848,29 +861,32 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     # ── Conversion table (Display) ────────────────────────────────────────────
     CONV_CH = {'Display'}
     conv_rows = grp_chan[grp_chan['_chan'].isin(CONV_CH)]
+    metric_lbl_disp = 'Conversion Rate' if use_conv_rate else 'Visit Rate'
     cv_head = _th(['Channel', 'Impressions', 'Clicks', 'CTR', 'eCPC',
-                   'Site Traffic', 'Visit Rate', 'Conversions', 'CPA'])
+                   'Site Traffic', metric_lbl_disp, 'Conversions', 'CPA'])
     cv_body = ''
     for _, r in conv_rows.iterrows():
         ctr_, cpc_, _, _, _ = calc_metrics(r.imp, r.clk, r.spnd, r.conv, r.pcv)
-        ch         = str(r['_chan'])
-        visit_rate = _p(r.st / r.imp * 100) if r.imp > 0 else NA
-        cpa_cell   = _m(r.spnd / r.conv) if r.conv else NA
+        ch        = str(r['_chan'])
+        rate_cell = _p((r.conv if use_conv_rate else r.st) / r.imp * 100) if r.imp > 0 else NA
+        cpa_cell  = _m(r.spnd / r.conv) if r.conv else NA
         cv_body += _td_row([ch, _n(r.imp), _n(r.clk), _p(ctr_), _m(cpc_),
-                             _n(r.st), visit_rate, _n(r.conv), cpa_cell])
+                             _n(r.st), rate_cell, _n(r.conv), cpa_cell])
 
     # ── Top 10 Creatives table ────────────────────────────────────────────────
+    numer_col_cre  = 'conv' if use_conv_rate else 'st'
+    metric_lbl_cre = 'Conversion Rate' if use_conv_rate else 'Visit Rate'
     top10_cre  = grp_cre.nlargest(10, 'st')
-    cre_vrs    = [r['st'] / r['imp'] if r['imp'] > 0 and r['st'] <= r['imp'] else None
+    cre_vrs    = [r[numer_col_cre] / r['imp'] if r['imp'] > 0 and r[numer_col_cre] <= r['imp'] else None
                   for _, r in top10_cre.iterrows()]
     _cre_vrs_valid = [v for v in cre_vrs if v is not None]
     avg_cre_vr = sum(_cre_vrs_valid) / len(_cre_vrs_valid) if _cre_vrs_valid else 0
     max_cre_vr = max(_cre_vrs_valid) if _cre_vrs_valid else 0
-    # Header for Visit Rate column includes avg sub-label with white marker tick
+    # Header for the rate column includes avg sub-label with white marker tick
     vr_avg_label = (_p(avg_cre_vr * 100) if avg_cre_vr > 0 else '')
-    vr_th_label  = (f'Visit Rate'
+    vr_th_label  = (f'{metric_lbl_cre}'
                     f'<div class="th-sub"><span class="th-avg-tick"></span> Avg {vr_avg_label}</div>'
-                    if vr_avg_label else 'Visit Rate')
+                    if vr_avg_label else metric_lbl_cre)
     cre_head = (
         f'<tr>{_h_th("Creative")}'
         f'{_h_th("CTR",right=True)}{_h_th("eCPC",right=True)}'
@@ -893,31 +909,40 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         cre_body += _td_row([cre_name, _p(ctr_), _m(cpc_), comp_v, _n(r.st), vr_bar])
 
     creative_insight_html = ''
-    if not top10_cre.empty and imp > 0 and st > 0:
-        campaign_vr = st / imp
+    _cre_campaign_numer = conv if use_conv_rate else st
+    if not top10_cre.empty and imp > 0 and _cre_campaign_numer > 0:
+        campaign_vr = _cre_campaign_numer / imp
         grp_cre_vr  = top10_cre.copy()
         grp_cre_vr['_vr'] = grp_cre_vr.apply(
-            lambda r: r['st'] / r['imp'] if r['imp'] > 0 and r['st'] <= r['imp'] else 0, axis=1)
+            lambda r: r[numer_col_cre] / r['imp'] if r['imp'] > 0 and r[numer_col_cre] <= r['imp'] else 0, axis=1)
         top_vr_row = grp_cre_vr.loc[grp_cre_vr['_vr'].idxmax()]
         if campaign_vr > 0:
             variance_pct = (top_vr_row['_vr'] - campaign_vr) / campaign_vr * 100
             if variance_pct > 0:
                 cre_name = _h(str(top_vr_row['Creative']))
-                creative_insight_html = _insight_box_html(
-                    'Traffic Efficiency',
-                    f'<strong>&#8220;{cre_name}&#8221;</strong> was your most effective asset at driving web traffic this month, achieving a Visit Rate <strong>{variance_pct:.0f}%</strong> above the campaign average.'
-                )
+                if use_conv_rate:
+                    creative_insight_html = _insight_box_html(
+                        'Conversion Efficiency',
+                        f'<strong>&#8220;{cre_name}&#8221;</strong> was your most effective asset at driving conversions this month, achieving a Conversion Rate <strong>{variance_pct:.0f}%</strong> above the campaign average.'
+                    )
+                else:
+                    creative_insight_html = _insight_box_html(
+                        'Traffic Efficiency',
+                        f'<strong>&#8220;{cre_name}&#8221;</strong> was your most effective asset at driving web traffic this month, achieving a Visit Rate <strong>{variance_pct:.0f}%</strong> above the campaign average.'
+                    )
 
     # ── Top 10 Sites table ────────────────────────────────────────────────────
+    numer_col_site  = 'conv' if use_conv_rate else 'st'
+    metric_lbl_site = 'Conversion Rate' if use_conv_rate else 'Visit Rate'
     site_body = ''
-    site_vrs     = [r.st / r.imp * 100 if r.imp > 0 else 0 for _, r in grp_site.iterrows()]
+    site_vrs     = [r[numer_col_site] / r.imp * 100 if r.imp > 0 else 0 for _, r in grp_site.iterrows()]
     site_vrs_pos = [v for v in site_vrs if v > 0]
     avg_site_vr  = sum(site_vrs_pos) / len(site_vrs_pos) if site_vrs_pos else 0
     max_site_vr  = max(site_vrs_pos) if site_vrs_pos else 0
     vr_avg_label = _p(avg_site_vr) if avg_site_vr > 0 else ''
-    vr_th_label  = (f'Visit Rate'
+    vr_th_label  = (f'{metric_lbl_site}'
                     f'<div class="th-sub"><span class="th-avg-tick"></span> Blended Avg {vr_avg_label}</div>'
-                    if vr_avg_label else 'Visit Rate')
+                    if vr_avg_label else metric_lbl_site)
     site_head = (
         f'<tr>{_h_th("Publisher Site")}'
         f'{_h_th("CPM",right=True)}{_h_th("CTR %",right=True)}'
@@ -935,19 +960,21 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         site_body += _td_row([site_name, _m(cpm_), _p(ctr_val), vr_bar])
 
     site_insight_html = ''
-    if not grp_site.empty and imp > 0 and st > 0:
-        campaign_vr = st / imp
+    _site_campaign_numer = conv if use_conv_rate else st
+    if not grp_site.empty and imp > 0 and _site_campaign_numer > 0:
+        campaign_vr = _site_campaign_numer / imp
         grp_site_vr = grp_site.copy()
         grp_site_vr['_vr'] = grp_site_vr.apply(
-            lambda r: r['st'] / r['imp'] if r['imp'] > 0 else 0, axis=1)
+            lambda r: r[numer_col_site] / r['imp'] if r['imp'] > 0 else 0, axis=1)
         top_site_row = grp_site_vr.loc[grp_site_vr['_vr'].idxmax()]
         if campaign_vr > 0 and top_site_row['_vr'] > 0:
             site_variance_pct = (top_site_row['_vr'] - campaign_vr) / campaign_vr * 100
             site_name         = _h(str(top_site_row['Site']))
-            site_insight_html = _insight_box_html(
-                'Key Environments',
-                f'<strong>{site_name}</strong> converted impressions to site visits at a rate <strong>{site_variance_pct:.0f}%</strong> above the campaign average — your most efficient placement this month. We have optimised the campaign to direct more of your investment here to maximise overall performance.'
-            )
+            if use_conv_rate:
+                site_body_text = (f'<strong>{site_name}</strong> drove conversions at a rate <strong>{site_variance_pct:.0f}%</strong> above the campaign average — your most efficient placement this month. We have optimised the campaign to direct more of your investment here to maximise overall performance.')
+            else:
+                site_body_text = (f'<strong>{site_name}</strong> converted impressions to site visits at a rate <strong>{site_variance_pct:.0f}%</strong> above the campaign average — your most efficient placement this month. We have optimised the campaign to direct more of your investment here to maximise overall performance.')
+            site_insight_html = _insight_box_html('Key Environments', site_body_text)
 
     # ── Glossary ──────────────────────────────────────────────────────────────
     roas_term = '''
@@ -1008,12 +1035,12 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
 
         for chan in sorted_chans:
             use_cpa = False
-            card    = _agp_card_html(chan, prosp_by_chan[chan], use_cpa)
+            card    = _agp_card_html(chan, prosp_by_chan[chan], use_cpa, use_conv_rate)
             if card:
                 agp_cards_html += card
                 agp_card_count += 1
 
-        rm_hub = _agp_remarketing_hub_html(remark_by_chan, display_total_conv, prosp_by_chan)
+        rm_hub = _agp_remarketing_hub_html(remark_by_chan, display_total_conv, prosp_by_chan, use_conv_rate)
         if rm_hub:
             agp_cards_html += rm_hub
             agp_card_count += 1
@@ -1215,8 +1242,9 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
     disp_info = (
         '<div class="context-box"><strong style="color:#C4B5D4">Display Advertising</strong>'
         ' — Display is built for <strong>direct response</strong>, driving site visits and'
-        ' conversions. The visit rate measures how effectively ad exposure translates into'
-        ' real website traffic.</div>'
+        f' conversions. The {"conversion" if use_conv_rate else "visit"} rate measures how'
+        f' effectively ad exposure translates into real'
+        f' {"conversions" if use_conv_rate else "website traffic"}.</div>'
     )
 
     # Display performance insight: share of total campaign site traffic
@@ -1290,11 +1318,13 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
             cv_table_html, disp_info + disp_perf_insight + combined_bench)))
 
     # Shared inline colour key used on AGP, Sites and Creatives slides
+    _perf_key_note = ('Conversion Rate: Conversions &div; Impressions' if use_conv_rate
+                       else 'Visit Rate: Site Visits &div; Impressions')
     _vr_key_html = (
         '<div class="inline-key">'
         + _BAR_COLOR_KEY
         + '<span class="bar-key-sep">&middot;</span>'
-        + '<span class="bar-key-note">Visit Rate: Site Visits &div; Impressions</span>'
+        + f'<span class="bar-key-note">{_perf_key_note}</span>'
         + '</div>'
     )
 
@@ -1318,11 +1348,11 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
             f'</div>'
         )
 
-    # Top Sites — only sites with above-average visit rate (matches cyan rows in the table)
+    # Top Sites — only sites with above-average rate (matches cyan rows in the table)
     if not grp_site.empty:
-        _site_perf = grp_site[(grp_site['st'] > 0) & (grp_site['imp'] > 0)].copy()
-        _site_perf['_vr'] = _site_perf['st'] / _site_perf['imp']
-        _site_avg_vr = _site_perf['st'].sum() / _site_perf['imp'].sum()
+        _site_perf = grp_site[(grp_site[numer_col_site] > 0) & (grp_site['imp'] > 0)].copy()
+        _site_perf['_vr'] = _site_perf[numer_col_site] / _site_perf['imp']
+        _site_avg_vr = _site_perf[numer_col_site].sum() / _site_perf['imp'].sum()
         _above_avg_sites = _site_perf[_site_perf['_vr'] >= _site_avg_vr].nlargest(2, '_vr')
         top_site_names = [str(r['Site']) for _, r in _above_avg_sites.iterrows()]
     else:
@@ -1332,11 +1362,11 @@ def generate_html(csv_path, client_name, conv_label, has_revenue,
         f'<table><thead>{site_head}</thead><tbody>{site_body}</tbody></table>',
         site_insight_html + site_optim + _vr_key_html)))
 
-    # Top Creatives — only creatives with above-average visit rate (matches cyan rows in the table)
+    # Top Creatives — only creatives with above-average rate (matches cyan rows in the table)
     if not top10_cre.empty:
-        _cre_perf = top10_cre[(top10_cre['imp'] > 0) & (top10_cre['st'] > 0)].copy()
-        _cre_perf['_vr'] = _cre_perf['st'] / _cre_perf['imp']
-        _cre_avg_vr = _cre_perf['st'].sum() / _cre_perf['imp'].sum()
+        _cre_perf = top10_cre[(top10_cre['imp'] > 0) & (top10_cre[numer_col_cre] > 0)].copy()
+        _cre_perf['_vr'] = _cre_perf[numer_col_cre] / _cre_perf['imp']
+        _cre_avg_vr = _cre_perf[numer_col_cre].sum() / _cre_perf['imp'].sum()
         _above_avg_cre = _cre_perf[_cre_perf['_vr'] >= _cre_avg_vr].nlargest(2, '_vr')
         top_cre_names = [str(r['Creative']) for _, r in _above_avg_cre.iterrows()]
     else:
@@ -2149,6 +2179,7 @@ def process_csv(csv_bytes, csv_filename, config_df, prev_data=None, client_histo
         spnd=('Advertiser Cost (Adv Currency)', 'sum'),
         clk=('Clicks', 'sum'),
         st=('_st', 'sum'),
+        conv=('_conv', 'sum'),
         rev=('_rev', 'sum')
     ).reset_index().sort_values('imp', ascending=False).head(10)
 
@@ -2212,10 +2243,15 @@ def main(csv_path):
 
 
 def _run_tests():
-    """Generate two test reports to ~/Desktop/Reporting/:
-    - high_conv_test_report.html  → uses real CSV, CPA should appear everywhere
+    """Generate three test reports to ~/Desktop/Reporting/:
+    - high_conv_test_report.html  → uses real CSV (~1617 conv), CPA + Conversion Rate
+                                    should appear everywhere on performance slides
+    - mid_conv_test_report.html   → same CSV scaled to ~500 conv, CPA should appear
+                                    (≥20 conv) but Visit Rate — not Conversion Rate —
+                                    should still show on performance slides (<1000)
     - low_conv_test_report.html   → same CSV but conversions zeroed to 5 total,
-                                    Cost Per Visit should appear instead of CPA
+                                    Cost Per Visit + Visit Rate should appear instead
+                                    of CPA / Conversion Rate
     """
     import io as _io
 
@@ -2258,9 +2294,47 @@ def _run_tests():
     assert 'Site Traffic — Monthly Trend' not in html_high, \
         'HIGH-CONV: sparkline must not switch to Site Traffic when conversions are high'
     assert 'Optimisation Opportunity' in html_high, 'HIGH-CONV: upsell block should appear'
+    assert 'Conversion Rate: Conversions &div; Impressions' in html_high, \
+        'HIGH-CONV: performance slides should show Conversion Rate (>1000 conv)'
     print(f'  ✓ Saved: {out_high}')
 
-    # ── Test 2: Low-conv (5 conversions on Display rows, CPV) ─────────────────
+    # ── Test 2: Mid-conv (real CSV scaled to ~500 conv, CPA + Visit Rate) ────
+    print('Running MID-CONV test…')
+    raw_df_mid    = pd.read_csv(_io.BytesIO(csv_bytes_real))
+    config_r_mid  = find_client_config(os.path.basename(CSV_PATH), config_df)
+    conv_cols_mid = find_conv_cols(raw_df_mid.columns.tolist(), config_r_mid)
+    MID_CONV_SCALE = 500 / 1617  # scale real ~1617 conv down to ~500 (20 < mid < 1000)
+    if conv_cols_mid:
+        for col in conv_cols_mid:
+            raw_df_mid[col] = pd.to_numeric(raw_df_mid[col], errors='coerce').fillna(0) * MID_CONV_SCALE
+
+    mid_csv = raw_df_mid.to_csv(index=False).encode('utf-8')
+
+    mid_history = pd.DataFrame([
+        {'Client': 'Meatbox', 'Month': 'January 2026',  'Impressions': 4_800_000, 'Clicks': 9_200,
+         'Spend': 7_000, 'Conversions': 340, 'Revenue': 0, 'Site Traffic': 29_000, 'Upsell_Triggered': 'FALSE'},
+        {'Client': 'Meatbox', 'Month': 'February 2026', 'Impressions': 5_300_000, 'Clicks': 10_100,
+         'Spend': 6_500, 'Conversions': 325, 'Revenue': 0, 'Site Traffic': 32_000, 'Upsell_Triggered': 'FALSE'},
+    ])
+    prev_data_mid = {
+        'Impressions': 5_300_000, 'Clicks': 10_100,
+        'Spend': 6_500, 'Conversions': 325, 'Revenue': 0, 'Site Traffic': 32_000,
+    }
+    client_name_mid, html_mid, _ = process_csv(
+        mid_csv, os.path.basename(CSV_PATH), config_df,
+        prev_data=prev_data_mid, client_history=mid_history,
+    )
+    out_mid = os.path.join(OUT_DIR, 'mid_conv_test_report.html')
+    with open(out_mid, 'w', encoding='utf-8') as f:
+        f.write(html_mid)
+    assert '>CPA<' in html_mid, 'MID-CONV: MoM table should have CPA header (≥20 conv)'
+    assert 'Visit Rate: Site Visits &div; Impressions' in html_mid, \
+        'MID-CONV: performance slides should still show Visit Rate (<1000 conv)'
+    assert 'Conversion Rate: Conversions &div; Impressions' not in html_mid, \
+        'MID-CONV: performance slides should NOT show Conversion Rate (<1000 conv)'
+    print(f'  ✓ Saved: {out_mid}')
+
+    # ── Test 3: Low-conv (5 conversions on Display rows, CPV) ─────────────────
     print('Running LOW-CONV test…')
     raw_df    = pd.read_csv(_io.BytesIO(csv_bytes_real))
     config_r  = find_client_config(os.path.basename(CSV_PATH), config_df)
@@ -2301,6 +2375,10 @@ def _run_tests():
     # Sparkline only renders with ≥2 history months; confirm CPA sparkline is NOT active
     assert 'Conversions — Monthly Trend' not in html_low, \
         'LOW-CONV: sparkline must not say Conversions when in low-conv mode'
+    assert 'Visit Rate: Site Visits &div; Impressions' in html_low, \
+        'LOW-CONV: performance slides should show Visit Rate (<1000 conv)'
+    assert 'Conversion Rate: Conversions &div; Impressions' not in html_low, \
+        'LOW-CONV: performance slides should NOT show Conversion Rate (<1000 conv)'
     print(f'  ✓ Saved: {out_low}')
 
     print('\nAll tests passed ✓')
